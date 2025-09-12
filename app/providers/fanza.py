@@ -5,7 +5,7 @@ from app.core.content_builder import ContentBuilder
 
 API_ENDPOINT = "https://api.dmm.com/affiliate/v3/ItemList"
 
-def build_content_html(row, content_builder: ContentBuilder | None = None, max_gallery=12):
+def build_content_html(row, content_builder: ContentBuilder | None = None, max_gallery: int = 12):
     title   = row.get("title","")
     maker   = row.get("maker","")
     actress = row.get("actress","")
@@ -14,13 +14,13 @@ def build_content_html(row, content_builder: ContentBuilder | None = None, max_g
     jacket  = row.get("image_large","") or ""
     samples = [u for u in (row.get("sample_images","").split("|") if row.get("sample_images") else []) if u][:max_gallery]
 
-    # ContentBuilder がある場合 → テンプレ駆動
+    # テンプレ駆動（指定時）
     if content_builder:
         item = dict(row)
         item["_max_gallery"] = max_gallery
         return content_builder.render(item)
 
-    # デフォルトHTML生成
+    # フォールバック（従来HTML）
     def img(u): return f'<img src="{u}" loading="lazy" decoding="async" alt="{title}">' if u else ""
     parts = []
     if jacket or samples:

@@ -115,6 +115,17 @@ class App(tk.Tk):
         self.runner = ProcessRunner(self._on_proc_line, self._on_proc_exit)
         self._build_ui()
 
+    def _browse_outfile(self):
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(
+            title="出力CSVの保存先",
+            defaultextension=".csv",
+            filetypes=[("CSV", ".csv"), ("All Files", "*.*")],
+            initialfile=os.path.basename(self.var_outfile.get()) if hasattr(self, "var_outfile") else "output.csv",
+        )
+        if path:
+            self.var_outfile.set(path)
+
     # -------------- UI --------------
     def _build_ui(self):
         pad = 8
@@ -127,15 +138,16 @@ class App(tk.Tk):
         # Tabs
         tab_basic = ttk.Frame(nb)
         tab_filters = ttk.Frame(nb)
+        tab_content = ttk.Frame(nb)   # ★ 本文タブを追加
         tab_wp = ttk.Frame(nb)
         tab_advanced = ttk.Frame(nb)
         nb.add(tab_basic, text="基本")
         nb.add(tab_filters, text="フィルタ")
+        nb.add(tab_content, text="本文")   # ★ 追加
         nb.add(tab_wp, text="WordPress")
         nb.add(tab_advanced, text="高度")
 
         # ---------- 基本 ----------
-        # 取得系
         self.var_site = tk.StringVar(value="FANZA")
         self.var_service = tk.StringVar(value="digital")
         self.var_floor = tk.StringVar(value="videoa")
@@ -154,7 +166,6 @@ class App(tk.Tk):
         add_labeled_entry(topA, "gte-date", self.var_gte, placeholder="YYYY-MM-DD")
         add_labeled_entry(topA, "lte-date", self.var_lte, placeholder="YYYY-MM-DD")
 
-        # 件数・ソート
         self.var_hits = tk.IntVar(value=20)
         self.var_max = tk.IntVar(value=20)
         self.var_sort = tk.StringVar(value="date")
@@ -170,16 +181,13 @@ class App(tk.Tk):
         ttk.Combobox(row1, textvariable=self.var_sort, state="readonly",
                      values=["date","-date","rank","-rank","price","-price"], width=10).pack(side=tk.LEFT, padx=(6, 18))
 
-        self.var_outfile = tk.StringVar(
-            value=os.path.join(os.getcwd(), "out", f"fanza_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-        )
+        self.var_outfile = tk.StringVar(value=os.path.join(os.getcwd(), "out", f"fanza_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"))
         row2 = ttk.Frame(topB); row2.pack(fill=tk.X, pady=4)
         ttk.Label(row2, text="出力CSV (--outfile)").pack(side=tk.LEFT)
         ent_out = ttk.Entry(row2, textvariable=self.var_outfile)
         ent_out.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
         ttk.Button(row2, text="参照...", command=self._browse_outfile).pack(side=tk.LEFT)
 
-        # 画像/品質
         self.var_verify = tk.BooleanVar(value=True)
         self.var_no_content = tk.BooleanVar(value=False)
         self.var_min_samples = tk.IntVar(value=1)
@@ -217,6 +225,49 @@ class App(tk.Tk):
         add_labeled_entry(f1, "exclude-title", self.var_exc_title)
         add_labeled_entry(f1, "include-cid-prefix", self.var_inc_cidp, placeholder="例: ^SSIS|^ABW")
         add_labeled_entry(f1, "exclude-cid-prefix", self.var_exc_cidp)
+
+        # ---------- 本文（テンプレ／フック） ----------
+        self.var_ctmpl = tk.StringVar()
+        self.var_cmdtmpl = tk.StringVar()
+        self.var_pre = tk.StringVar()
+        self.var_post = tk.StringVar()
+        self.var_hook = tk.StringVar()
+        self.var_maxgal = tk.IntVar(value=12)
+
+        cf = ttk.LabelFrame(tab_content, text="テンプレート / フック")
+        cf.pack(fill=tk.X, padx=6, pady=6)
+
+        def _pick(var, title, patterns):
+            path = filedialog.askopenfilename(title=title, filetypes=patterns)
+            if path:
+                var.set(path)
+
+        row_ct = ttk.Frame(cf); row_ct.pack(fill=tk.X, pady=4)
+        ttk.Label(row_ct, text="content-template", width=20).pack(side=tk.LEFT)
+        ttk.Entry(row_ct, textvariable=self.var_ctmpl).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        ttk.Button(row_ct, text="参照…", command=lambda: _pick(self.var_ctmpl, "content-template", [["Jinja2/HTML", ".j2 .html"], ["All", "*.*"]])).pack(side=tk.LEFT)
+
+        row_md = ttk.Frame(cf); row_md.pack(fill=tk.X, pady=4)
+        ttk.Label(row_md, text="content-md-template", width=20).pack(side=tk.LEFT)
+        ttk.Entry(row_md, textvariable=self.var_cmdtmpl).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        ttk.Button(row_md, text="参照…", command=lambda: _pick(self.var_cmdtmpl, "content-md-template", [["Jinja2/Markdown", ".j2 .md"], ["All", "*.*"]])).pack(side=tk.LEFT)
+
+        row_pre = ttk.Frame(cf); row_pre.pack(fill=tk.X, pady=4)
+        ttk.Label(row_pre, text="prepend-html", width=20).pack(side=tk.LEFT)
+        ttk.Entry(row_pre, textvariable=self.var_pre).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+
+        row_post = ttk.Frame(cf); row_post.pack(fill=tk.X, pady=4)
+        ttk.Label(row_post, text="append-html", width=20).pack(side=tk.LEFT)
+        ttk.Entry(row_post, textvariable=self.var_post).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+
+        row_hook = ttk.Frame(cf); row_hook.pack(fill=tk.X, pady=4)
+        ttk.Label(row_hook, text="content-hook", width=20).pack(side=tk.LEFT)
+        ttk.Entry(row_hook, textvariable=self.var_hook).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        ttk.Label(row_hook, text="例: hooks.myhook:transform").pack(side=tk.LEFT, padx=6)
+
+        row_g = ttk.Frame(cf); row_g.pack(fill=tk.X, pady=4)
+        ttk.Label(row_g, text="max-gallery", width=20).pack(side=tk.LEFT)
+        ttk.Spinbox(row_g, from_=0, to=60, textvariable=self.var_maxgal, width=6).pack(side=tk.LEFT)
 
         # ---------- WordPress ----------
         self.var_wp_post = tk.BooleanVar(value=False)
@@ -273,17 +324,6 @@ class App(tk.Tk):
         self.txt.pack(fill=tk.BOTH, expand=True)
         self._append_log(f"[{APP_TITLE}] 準備完了。\n")
 
-    # -------------- Actions --------------
-    def _browse_outfile(self):
-        path = filedialog.asksaveasfilename(
-            title="出力CSVの保存先",
-            defaultextension=".csv",
-            filetypes=[["CSV", ".csv"],["All Files", "*.*"]],
-            initialfile=os.path.basename(self.var_outfile.get()) if hasattr(self, 'var_outfile') else "output.csv",
-        )
-        if path:
-            self.var_outfile.set(path)
-
     def _append_log(self, line: str):
         self.txt.insert(tk.END, line + "\n")
         self.txt.see(tk.END)
@@ -298,10 +338,7 @@ class App(tk.Tk):
             cmd = [cli]
         else:
             if is_frozen:
-                messagebox.showerror(
-                    "実行に必要なファイルがありません",
-                    "fanza_cli.exe が見つかりません。同じフォルダに fanza_cli.exe を置いてください。"
-                )
+                messagebox.showerror("実行に必要なファイルがありません", "fanza_cli.exe が見つかりません。同じフォルダに fanza_cli.exe を置いてください。")
                 return None
             else:
                 cmd = [sys.executable or "python", "-m", "app.main"]
@@ -363,6 +400,19 @@ class App(tk.Tk):
         cmd += ["--head-timeout", str(self.var_head_timeout.get())]
         if self.var_head_insecure.get():
             cmd.append("--head-insecure")
+
+        # ★ 本文テンプレ系（CLIへ反映）
+        if self.var_ctmpl.get().strip():
+            cmd += ["--content-template", self.var_ctmpl.get().strip()]
+        if self.var_cmdtmpl.get().strip():
+            cmd += ["--content-md-template", self.var_cmdtmpl.get().strip()]
+        if self.var_pre.get().strip():
+            cmd += ["--prepend-html", self.var_pre.get().strip()]
+        if self.var_post.get().strip():
+            cmd += ["--append-html", self.var_post.get().strip()]
+        if self.var_hook.get().strip():
+            cmd += ["--content-hook", self.var_hook.get().strip()]
+        cmd += ["--max-gallery", str(self.var_maxgal.get())]
 
         if self.var_wp_post.get():
             cmd.append("--wp-post")

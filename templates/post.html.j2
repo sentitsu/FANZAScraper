@@ -1,0 +1,59 @@
+{# post.html.j2 — rowのキーに合わせ、見やすく整形 #}
+<article class="entry">
+
+  {# --- メタ情報（縦に並べる） --- #}
+  <ul class="meta">
+    {% if item.maker %}
+      <li><strong>メーカー:</strong> {{ item.maker }}</li>
+    {% endif %}
+    {% if item.actress %}
+      <li><strong>出演:</strong> {{ item.actress }}</li>
+    {% endif %}
+    {% if item.date %}
+      {# "YYYY-MM-DD hh:mm:ss" → "YYYY-MM-DD" に #}
+      {% set _date = item.date.split(" ")[0] if " " in item.date else item.date %}
+      <li><strong>発売日:</strong> {{ _date }}</li>
+    {% endif %}
+    {% if item.cid %}
+      <li><strong>品番:</strong> {{ item.cid }}</li>
+    {% endif %}
+    {% if item.genres %}
+      <li><strong>ジャンル:</strong> {{ item.genres }}</li>
+    {% endif %}
+  </ul>
+
+  {# --- メイン画像（大） --- #}
+  {% if item.image_large %}
+    <figure class="lead-image">
+      <img src="{{ item.image_large }}" alt="{{ item.title or '' }}" loading="lazy" decoding="async">
+    </figure>
+  {% endif %}
+
+  {# --- ギャラリー（"a|b|c" → 配列化して上限で切る） --- #}
+  {% set _max = item._max_gallery|default(12) %}
+  {% set imgs = item.sample_images.split("|") if item.sample_images else [] %}
+  {% if imgs %}
+    <section class="gallery">
+      {% for u in imgs[:_max] %}
+        {% if u %}
+          <figure class="gallery__item"><img src="{{ u }}" alt="{{ item.title or '' }} sample {{ loop.index }}" loading="lazy" decoding="async"></figure>
+        {% endif %}
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  {# --- アフィリンク --- #}
+  {% if item.URL %}
+    <p class="cta"><a href="{{ item.URL }}" target="_blank" rel="sponsored noopener">作品ページを見る</a></p>
+  {% endif %}
+
+</article>
+
+<style>
+/* お好みで：箇条書きの黒点を消して行間を詰める */
+.entry .meta { list-style: none; padding: 0; margin: 0 0 1em; }
+.entry .meta li { margin: 0.2em 0; }
+.entry .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px,1fr)); gap: 8px; }
+.entry .gallery__item { margin: 0; }
+.entry .lead-image img, .entry .gallery img { height: auto; max-width: 100%; display: block; }
+</style>

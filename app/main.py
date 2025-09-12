@@ -6,6 +6,34 @@ from app.util.logger import log_json
 from pathlib import Path
 import sys
 
+def _load_env():
+    """
+    .env 探索優先:
+      1) プロジェクト直下（repo/.env）
+      2) CWD（実行ディレクトリ）/.env
+      3) 実行ファイルのあるディレクトリ/.env（pyinstaller対策）
+    """
+    candidates = []
+
+    # repo 直下（このファイルは app/main.py）
+    repo_root = Path(__file__).resolve().parents[1]
+    candidates.append(repo_root / ".env")
+
+    # CWD
+    candidates.append(Path.cwd() / ".env")
+
+    # frozen exe（配布版のとき）
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.argv[0]).parent / ".env")
+
+    for p in candidates:
+        try:
+            if p.exists():
+                load_dotenv(p)
+                break
+        except Exception:
+            pass
+
 def build_args():
     ap = argparse.ArgumentParser(description="FANZA → WordPress 自動投稿（CSV/REST両対応）")
     # 取得系
@@ -31,6 +59,11 @@ def build_args():
     ap.add_argument("--min-samples", type=int, default=1)
     ap.add_argument("--release-after", default=None)
     ap.add_argument("--skip-placeholder", action="store_true")
+    ap.add_argument("--content-template", help="Jinja2のHTMLテンプレート（例: templates/post.html.j2）")
+    ap.add_argument("--content-md-template", help="Markdownテンプレート（例: templates/post.md.j2）")
+    ap.add_argument("--prepend-html", help="本文の先頭に差し込む任意のHTML文字列")
+    ap.add_argument("--append-html", help="本文の末尾に差し込む任意のHTML文字列")
+    ap.add_argument("--content-hook", help="カスタム加工フック（例: hooks.myhook:transform）。def transform(item, html)->str を実装")
     ap.add_argument("--max-gallery", type=int, default=12)
     ap.add_argument("--no-content", action="store_true")
 
@@ -66,11 +99,16 @@ def build_args():
 
 
 def run():
-    # PyInstaller対策: exe / スクリプト いずれでも「自身のフォルダの .env」を読む
-    base_dir = Path(sys.argv[0]).parent
-    load_dotenv(dotenv_path=base_dir / ".env")  # ← 追加
-
+    _load_env()
     args = build_args().parse_args()
+
+    # ★ 前提チェック：キー未設定なら即わかるように
+    if not args.api_id or not args.affiliate_id:
+        missing = []
+        if not args.api_id: missing.append("API_ID / --api-id")
+        if not args.affiliate_id: missing.append("AFFILIATE_ID / --affiliate-id")
+        raise SystemExit("Missing required DMM API credentials: " + ", ".join(missing))
+
     result = run_pipeline(args)
     log_json("info", **result)
 
