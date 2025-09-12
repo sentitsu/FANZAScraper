@@ -1,10 +1,11 @@
 # app/providers/fanza.py
 import re, json, time, requests
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from app.core.content_builder import ContentBuilder
 
 API_ENDPOINT = "https://api.dmm.com/affiliate/v3/ItemList"
 
-def build_content_html(row, max_gallery=12):
+def build_content_html(row, content_builder: ContentBuilder | None = None, max_gallery=12):
     title   = row.get("title","")
     maker   = row.get("maker","")
     actress = row.get("actress","")
@@ -13,28 +14,29 @@ def build_content_html(row, max_gallery=12):
     jacket  = row.get("image_large","") or ""
     samples = [u for u in (row.get("sample_images","").split("|") if row.get("sample_images") else []) if u][:max_gallery]
 
-    def img(u):
-        return f'<img src="{u}" loading="lazy" decoding="async" alt="{title}">' if u else ""
+    # ContentBuilder がある場合 → テンプレ駆動
+    if content_builder:
+        item = dict(row)
+        item["_max_gallery"] = max_gallery
+        return content_builder.render(item)
 
+    # デフォルトHTML生成
+    def img(u): return f'<img src="{u}" loading="lazy" decoding="async" alt="{title}">' if u else ""
     parts = []
     if jacket or samples:
         first_img = jacket or samples[0]
         parts.append(f'<figure class="lead-image">{img(first_img)}</figure>')
-
     meta = []
     if actress: meta.append(f"<strong>出演:</strong> {actress}")
     if maker:   meta.append(f"<strong>メーカー:</strong> {maker}")
     if genres:  meta.append(f"<strong>ジャンル:</strong> {genres}")
     if meta:
         parts.append("<p>" + "<br>".join(meta) + "</p>")
-
     if samples:
         items = "\n".join(f'<figure class="gallery__item">{img(u)}</figure>' for u in samples)
         parts.append(f'<div class="gallery">{items}</div>')
-
     if url:
         parts.append(f'<p><a href="{url}" rel="nofollow sponsored" target="_blank">公式ページはこちら</a></p>')
-
     return "\n".join(parts)
 
 def fetch_items(api_id, affiliate_id, params, start=1, hits=100):

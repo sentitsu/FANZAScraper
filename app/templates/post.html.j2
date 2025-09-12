@@ -1,0 +1,32 @@
+<article class="entry">
+  <h2>{{ item.title }}</h2>
+
+  {% if item.lead %}
+    <p class="lead">{{ item.lead }}</p>
+  {% endif %}
+
+  <div class="meta">
+    {% if item.maker %}<span class="maker">{{ item.maker }}</span>{% endif %}
+    {% if item.actresses %}<span class="actresses">{{ item.actresses|join(", ") }}</span>{% endif %}
+    {% if item.release_date %}<time datetime="{{ item.release_date }}">{{ item.release_date }}</time>{% endif %}
+    {% if item.cid %}<span class="cid">{{ item.cid }}</span>{% endif %}
+  </div>
+
+  {% if item.description %}
+    <section class="desc">
+      {{ item.description | safe }}
+    </section>
+  {% endif %}
+
+  {% if item.sample_images %}
+    <section class="gallery">
+      {% for img in item.sample_images[:item._max_gallery] %}
+        <figure><img src="{{ img }}" loading="lazy" decoding="async"></figure>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  {% if item.affiliate_url %}
+    <p class="cta"><a href="{{ item.affiliate_url }}" target="_blank" rel="sponsored noopener">作品ページを見る</a></p>
+  {% endif %}
+</article>
