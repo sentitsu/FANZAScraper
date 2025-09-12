@@ -1,0 +1,21 @@
+# Python キャッシュ
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ビルド・配布物
+build/
+dist/
+*.spec
+
+# 出力ファイル・ログ
+out/
+*.log
+
+# 環境変数
+.env
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.vscode/

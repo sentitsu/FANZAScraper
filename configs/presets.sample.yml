@@ -1,0 +1,8 @@
+# よく使う取得条件のプリセット例
+new_releases:
+  site: FANZA
+  service: digital
+  floor: videoa
+  gte_date: "2025-09-01"
+  hits: 100
+  max: 300

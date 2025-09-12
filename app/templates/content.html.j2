@@ -1,0 +1,25 @@
+<figure class="lead-image">
+  <img src="{{ first_img }}" loading="lazy" decoding="async" alt="{{ title }}">
+</figure>
+
+{% if actress or maker or genres %}
+<p>
+  {% if actress %}<strong>出演:</strong> {{ actress }}<br>{% endif %}
+  {% if maker %}<strong>メーカー:</strong> {{ maker }}<br>{% endif %}
+  {% if genres %}<strong>ジャンル:</strong> {{ genres }}{% endif %}
+</p>
+{% endif %}
+
+{% if samples %}
+<div class="gallery">
+  {% for u in samples %}
+  <figure class="gallery__item">
+    <img src="{{ u }}" loading="lazy" decoding="async" alt="{{ title }}">
+  </figure>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if url %}
+<p><a href="{{ url }}" rel="nofollow sponsored" target="_blank">公式ページはこちら</a></p>
+{% endif %}
