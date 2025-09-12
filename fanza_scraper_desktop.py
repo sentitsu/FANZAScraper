@@ -127,12 +127,10 @@ class App(tk.Tk):
         # Tabs
         tab_basic = ttk.Frame(nb)
         tab_filters = ttk.Frame(nb)
-        tab_content = ttk.Frame(nb)   # ★ 追加：本文テンプレ／フック
         tab_wp = ttk.Frame(nb)
         tab_advanced = ttk.Frame(nb)
         nb.add(tab_basic, text="基本")
         nb.add(tab_filters, text="フィルタ")
-        nb.add(tab_content, text="本文")   # ★ 追加
         nb.add(tab_wp, text="WordPress")
         nb.add(tab_advanced, text="高度")
 
@@ -172,7 +170,9 @@ class App(tk.Tk):
         ttk.Combobox(row1, textvariable=self.var_sort, state="readonly",
                      values=["date","-date","rank","-rank","price","-price"], width=10).pack(side=tk.LEFT, padx=(6, 18))
 
-        self.var_outfile = tk.StringVar(value=os.path.join(os.getcwd(), "out", f"fanza_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"))
+        self.var_outfile = tk.StringVar(
+            value=os.path.join(os.getcwd(), "out", f"fanza_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        )
         row2 = ttk.Frame(topB); row2.pack(fill=tk.X, pady=4)
         ttk.Label(row2, text="出力CSV (--outfile)").pack(side=tk.LEFT)
         ent_out = ttk.Entry(row2, textvariable=self.var_outfile)
@@ -217,49 +217,6 @@ class App(tk.Tk):
         add_labeled_entry(f1, "exclude-title", self.var_exc_title)
         add_labeled_entry(f1, "include-cid-prefix", self.var_inc_cidp, placeholder="例: ^SSIS|^ABW")
         add_labeled_entry(f1, "exclude-cid-prefix", self.var_exc_cidp)
-
-        # ---------- 本文（テンプレ／フック） ----------
-        self.var_ctmpl = tk.StringVar()
-        self.var_cmdtmpl = tk.StringVar()
-        self.var_pre = tk.StringVar()
-        self.var_post = tk.StringVar()
-        self.var_hook = tk.StringVar()
-        self.var_maxgal = tk.IntVar(value=12)
-
-        cf = ttk.LabelFrame(tab_content, text="テンプレート / フック")
-        cf.pack(fill=tk.X, padx=6, pady=6)
-
-        def _pick(var, title, patterns):
-            path = filedialog.askopenfilename(title=title, filetypes=patterns)
-            if path:
-                var.set(path)
-
-        row_ct = ttk.Frame(cf); row_ct.pack(fill=tk.X, pady=4)
-        ttk.Label(row_ct, text="content-template", width=20).pack(side=tk.LEFT)
-        ttk.Entry(row_ct, textvariable=self.var_ctmpl).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        ttk.Button(row_ct, text="参照…", command=lambda: _pick(self.var_ctmpl, "content-template", [["Jinja2/HTML", ".j2 .html"], ["All", "*.*"]])).pack(side=tk.LEFT)
-
-        row_md = ttk.Frame(cf); row_md.pack(fill=tk.X, pady=4)
-        ttk.Label(row_md, text="content-md-template", width=20).pack(side=tk.LEFT)
-        ttk.Entry(row_md, textvariable=self.var_cmdtmpl).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        ttk.Button(row_md, text="参照…", command=lambda: _pick(self.var_cmdtmpl, "content-md-template", [["Jinja2/Markdown", ".j2 .md"], ["All", "*.*"]])).pack(side=tk.LEFT)
-
-        row_pre = ttk.Frame(cf); row_pre.pack(fill=tk.X, pady=4)
-        ttk.Label(row_pre, text="prepend-html", width=20).pack(side=tk.LEFT)
-        ttk.Entry(row_pre, textvariable=self.var_pre).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-
-        row_post = ttk.Frame(cf); row_post.pack(fill=tk.X, pady=4)
-        ttk.Label(row_post, text="append-html", width=20).pack(side=tk.LEFT)
-        ttk.Entry(row_post, textvariable=self.var_post).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-
-        row_hook = ttk.Frame(cf); row_hook.pack(fill=tk.X, pady=4)
-        ttk.Label(row_hook, text="content-hook", width=20).pack(side=tk.LEFT)
-        ttk.Entry(row_hook, textvariable=self.var_hook).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        ttk.Label(row_hook, text="例: hooks.myhook:transform").pack(side=tk.LEFT, padx=6)
-
-        row_g = ttk.Frame(cf); row_g.pack(fill=tk.X, pady=4)
-        ttk.Label(row_g, text="max-gallery", width=20).pack(side=tk.LEFT)
-        ttk.Spinbox(row_g, from_=0, to=60, textvariable=self.var_maxgal, width=6).pack(side=tk.LEFT)
 
         # ---------- WordPress ----------
         self.var_wp_post = tk.BooleanVar(value=False)
@@ -338,25 +295,21 @@ class App(tk.Tk):
         cli = os.path.join(base_dir, "fanza_cli.exe")
 
         if os.path.exists(cli):
-            cmd = [cli]  # CLI exe があればそれを使う
+            cmd = [cli]
         else:
             if is_frozen:
-                # 配布版exeなのに fanza_cli.exe が無ければエラー
                 messagebox.showerror(
                     "実行に必要なファイルがありません",
                     "fanza_cli.exe が見つかりません。同じフォルダに fanza_cli.exe を置いてください。"
                 )
                 return None
             else:
-                # 開発時: Pythonから直接 app.main を呼ぶ
                 cmd = [sys.executable or "python", "-m", "app.main"]
 
-        # プレースホルダ文字列（GUIヒントを実値として渡さない）
         PH_KW = "例: 単体女優"
         PH_CID = "例: SSIS-123"
         PH_DATE = "YYYY-MM-DD"
 
-        # 共通引数
         cmd += [
             "--hits", str(self.var_hits.get()),
             "--max", str(self.var_max.get()),
@@ -364,7 +317,6 @@ class App(tk.Tk):
             "--outfile", self.var_outfile.get()
         ]
 
-        # 取得系
         if self.var_site.get().strip():
             cmd += ["--site", self.var_site.get().strip()]
         if self.var_service.get().strip():
@@ -384,7 +336,6 @@ class App(tk.Tk):
         if lte and lte != PH_DATE:
             cmd += ["--lte-date", lte]
 
-        # 画像/品質
         if self.var_verify.get():
             cmd.append("--verify-images")
         if self.var_no_content.get():
@@ -393,7 +344,6 @@ class App(tk.Tk):
             cmd.append("--skip-placeholder")
         cmd += ["--min-samples", str(self.var_min_samples.get())]
 
-        # フィルタ
         def add_regex(flag, s):
             if s.strip():
                 cmd.extend([flag, s.strip()])
@@ -408,27 +358,12 @@ class App(tk.Tk):
         add_regex("--include-cid-prefix", self.var_inc_cidp.get())
         add_regex("--exclude-cid-prefix", self.var_exc_cidp.get())
 
-        # HEAD制御
         if self.var_no_head.get():
             cmd.append("--no-head-check")
         cmd += ["--head-timeout", str(self.var_head_timeout.get())]
         if self.var_head_insecure.get():
             cmd.append("--head-insecure")
 
-        # ★ 本文テンプレ系（pipeline側で ContentBuilder 初期化に使用）:contentReference[oaicite:3]{index=3}
-        if self.var_ctmpl.get().strip():
-            cmd += ["--content-template", self.var_ctmpl.get().strip()]
-        if self.var_cmdtmpl.get().strip():
-            cmd += ["--content-md-template", self.var_cmdtmpl.get().strip()]
-        if self.var_pre.get().strip():
-            cmd += ["--prepend-html", self.var_pre.get().strip()]
-        if self.var_post.get().strip():
-            cmd += ["--append-html", self.var_post.get().strip()]
-        if self.var_hook.get().strip():
-            cmd += ["--content-hook", self.var_hook.get().strip()]
-        cmd += ["--max-gallery", str(self.var_maxgal.get())]
-
-        # WP
         if self.var_wp_post.get():
             cmd.append("--wp-post")
             if self.var_future.get().strip():
