@@ -1,12 +1,206 @@
-{% set W = item.player_width  or 720 %}
-{% set H = item.player_height or 480 %}
+{# ============================================
+   改良版 Post テンプレート (Jinja2) — javmix-av.com
+   目的: 収益/UX/SEO(A11y/構造化データ)を総合強化
+   想定: WordPress + FANZAScraper 生成HTMLとして本文に挿入
+   注意: HLS再生(hls.js)はテーマ/共通JSで1度だけ読み込み推奨
+   ============================================ #}
 
-<div class="fanza-fixed-embed"
-     style="width:100%;max-width:{{W}}px;aspect-ratio: {{W}} / {{H}};margin:0 auto;overflow:hidden;">
-  <iframe
-    src="{{ item.trailer_iframe_src | replace('size=1280_720','size=' ~ W ~ '_' ~ H) }}"
-    width="{{ W }}" height="{{ H }}"
-    style="width:100% !important;height:100% !important;display:block !important;border:0 !important;position:static !important;overflow:hidden;"
-    scrolling="no" frameborder="0" allowfullscreen>
-  </iframe>
-</div>
+<article class="entry" itemscope itemtype="https://schema.org/Product">
+  {# ---------- 事前整形 ---------- #}
+  {% set samples = item.sample_images.split("|") if item.sample_images else [] %}
+  {% set poster  = item.trailer_poster or item.image_large or (samples[0] if samples else None) %}
+  {% set _date   = (item.date.split(" ")[0] if item.date and (" " in item.date) else item.date) %}
+  {% set tu      = item.trailer_url or '' %}
+  {% set tu_l    = tu|lower|replace('\n','') %}
+  {% set is_mp4  = (tu_l.endswith('.mp4') or ('.mp4?'  in tu_l)) %}
+  {% set is_m3u8 = (tu_l.endswith('.m3u8') or ('.m3u8?' in tu_l)) %}
+  {% set _max    = item._max_gallery|default(12) %}
+  {# iframeサイズ（.env→CSVから入っている想定） #}
+  {% set W = item.player_width  or 1280 %}
+  {% set H = item.player_height or 720 %}
+
+  {# ---------- 見出し ---------- #}
+  {% if item.title %}
+    <header class="entry__header">
+      <h1 class="entry__title" itemprop="name">{{ item.title }}</h1>
+      {% if item.cid %}<meta itemprop="sku" content="{{ item.cid }}">{% endif %}
+      {% if item.URL %}<link itemprop="url" href="{{ item.URL }}">{% endif %}
+    </header>
+  {% endif %}
+
+  {# ---------- メタ情報 ---------- #}
+  <section class="entry__meta" aria-label="作品情報">
+    <dl class="meta">
+      {% if item.maker %}<div class="meta__row"><dt>メーカー</dt><dd itemprop="brand">{{ item.maker }}</dd></div>{% endif %}
+      {% if item.actress %}<div class="meta__row"><dt>出演</dt><dd itemprop="actor">{{ item.actress }}</dd></div>{% endif %}
+      {% if _date %}<div class="meta__row"><dt>発売日</dt><dd><time datetime="{{ _date }}" itemprop="releaseDate">{{ _date }}</time></dd></div>{% endif %}
+      {% if item.cid %}<div class="meta__row"><dt>品番</dt><dd><code>{{ item.cid }}</code></dd></div>{% endif %}
+      {% if item.genres %}<div class="meta__row"><dt>ジャンル</dt><dd itemprop="genre">{{ item.genres }}</dd></div>{% endif %}
+    </dl>
+  </section>
+
+  {# ---------- リード動画 / 画像 ---------- #}
+  {% if item.trailer_embed %}
+    {# A案：DMMのUI込みで確実にズレない 4:3 ボックス #}
+    <div class="fanza-embed fanza-embed--ui" style="--w:{{W}}; --h:{{H}};">
+      <iframe
+        src="{{ item.trailer_embed }}"
+        width="{{ W }}" height="{{ H }}"
+        loading="lazy" allowfullscreen scrolling="no" frameborder="0">
+      </iframe>
+    </div>
+
+  {% elif is_mp4 %}
+    <figure class="lead-media" itemprop="hasVideo" itemscope itemtype="https://schema.org/VideoObject">
+      <meta itemprop="name" content="{{ item.title or '' }} 予告編">
+      {% if poster %}<meta itemprop="thumbnailUrl" content="{{ poster }}">{% endif %}
+      {% if item.URL %}<meta itemprop="url" content="{{ item.URL }}">{% endif %}
+      <video class="lead-media__video" controls preload="none" playsinline {% if poster %}poster="{{ poster }}"{% endif %}>
+        <source src="{{ item.trailer_url }}" type="video/mp4">
+      </video>
+      {% if item.title %}<figcaption class="lead-media__cap">{{ item.title }} — 予告編</figcaption>{% endif %}
+    </figure>
+
+  {% elif is_m3u8 %}
+    <figure class="lead-media" itemprop="hasVideo" itemscope itemtype="https://schema.org/VideoObject">
+      <meta itemprop="name" content="{{ item.title or '' }} 予告編(HLS)">
+      {% if poster %}<meta itemprop="thumbnailUrl" content="{{ poster }}">{% endif %}
+      {% if item.URL %}<meta itemprop="url" content="{{ item.URL }}">{% endif %}
+      <video class="lead-media__video hls-player" controls preload="none" playsinline data-src="{{ item.trailer_url }}" {% if poster %}poster="{{ poster }}"{% endif %}></video>
+      {% if item.title %}<figcaption class="lead-media__cap">{{ item.title }} — 予告編</figcaption>{% endif %}
+    </figure>
+
+  {% elif poster %}
+    <figure class="lead-media">
+      <a class="video-fallback" href="{{ item.URL }}" target="_blank" rel="sponsored noopener" aria-label="公式ページで動画を見る">
+        <img src="{{ poster }}" alt="{{ item.title or '' }}" loading="lazy" decoding="async">
+        <span class="playbtn" aria-hidden="true">▶</span>
+      </a>
+    </figure>
+  {% endif %}
+
+  {# ---------- ギャラリー ---------- #}
+  {% if samples %}
+    <section class="gallery" aria-label="サンプル画像">
+      {% for u in samples[:_max] %}
+        {% if u %}
+          <figure class="gallery__item">
+            <img src="{{ u }}" alt="{{ item.title or '' }} サンプル {{ loop.index }}" loading="lazy" decoding="async" itemprop="image">
+          </figure>
+        {% endif %}
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  {# ---------- CTA ---------- #}
+  {% if item.URL %}
+    <p class="cta">
+      <a class="cta__btn" href="{{ item.URL }}" target="_blank" rel="sponsored noopener" itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+        <span itemprop="url">作品ページを見る</span>
+      </a>
+    </p>
+  {% endif %}
+
+  {# ---------- JSON-LD (構造化データ) ---------- #}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    {% if item.title %}"name": {{ item.title|tojson }},{% endif %}
+    {% if poster %}"image": {{ poster|tojson }},{% endif %}
+    {% if item.description %}"description": {{ item.description|tojson }},{% endif %}
+    {% if item.cid %}"sku": {{ item.cid|tojson }},{% endif %}
+    {% if item.genres %}"category": {{ item.genres|tojson }},{% endif %}
+    {% if item.maker %}"brand": {"@type": "Brand", "name": {{ item.maker|tojson }}},{% endif %}
+    {% if _date %}"releaseDate": {{ _date|tojson }},{% endif %}
+    {% if item.URL %}"url": {{ item.URL|tojson }},{% endif %}
+    {% if is_mp4 or is_m3u8 %}
+    "hasVideo": {
+      "@type": "VideoObject",
+      "name": {{ (item.title ~ ' 予告編')|tojson }},
+      {% if poster %}"thumbnailUrl": {{ poster|tojson }},{% endif %}
+      {% if item.trailer_url %}"contentUrl": {{ item.trailer_url|tojson }},{% endif %}
+      {% if _date %}"uploadDate": {{ _date|tojson }}{% endif %}
+    }
+    {% endif %}
+  }
+  </script>
+</article>
+
+{# ---------- HLS 初期化(必要時のみ) ---------- #}
+<script>
+(function(){
+  var el = document.querySelector('video.hls-player');
+  if(!el) return;
+  var src = el.getAttribute('data-src');
+  if (!src) return;
+
+  if (el.canPlayType('application/vnd.apple.mpegurl')) {
+    el.src = src;
+  } else if (window.Hls) {
+    var hls = new Hls({ maxBufferLength: 30 });
+    hls.loadSource(src);
+    hls.attachMedia(el);
+  } else {
+    var p = el.parentNode;
+    var a = document.createElement('a');
+    a.href = src; a.textContent = 'サンプル動画を再生 (m3u8)'; a.rel = 'noopener'; a.target = '_blank';
+    p.appendChild(a);
+  }
+})();
+</script>
+
+<style>
+/* ====== Layout ====== */
+.entry{
+  --gap:14px;
+  --radius:12px;
+  --bg:#ffffff;
+  --fg:#000000;
+  --fg-weak:#333333;
+  --brand:#f5d36a;
+}
+.entry{color:var(--fg)}
+.entry a{color:inherit}
+
+.entry__header{margin:0 0 .6rem}
+.entry__title{font-size:clamp(1.05rem,1.4vw+1rem,1.8rem);line-height:1.35;margin:0 0 .2rem;font-weight:800}
+
+/* meta */
+.meta{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .8rem;margin:0 0 1rem}
+.meta__row{display:contents}
+.meta dt{color:var(--fg-weak);font-weight:600}
+.meta dd{margin:0}
+
+/* === DMM埋め込み（UI込み4:3） === */
+.fanza-embed{
+  position:relative; width:100%; max-width:calc(var(--w)*1px);
+  margin:0 auto 1rem; overflow:hidden; background:#000;
+  border-radius:var(--radius); line-height:0; clear:both; isolation:isolate;
+}
+.fanza-embed--ui::before{ content:""; display:block; padding-top:75%; } /* ←ここが効く */
+.fanza-embed > iframe{
+  position:absolute; inset:0; width:100% !important; height:100% !important;
+  border:0; display:block !important;
+}
+/* Cocoonの共通iframeルールを無効化 */
+.entry-content iframe{ max-width:none !important; }
+
+/* lead media (mp4/HLS フォールバック用) */
+.lead-media{margin:0 0 .8rem}
+.lead-media__video{width:100%;display:block;background:#000;border-radius:var(--radius);aspect-ratio:16/9}
+.lead-media__cap{font-size:.9rem;color:var(--fg-weak);margin:.3rem 0 0}
+.video-fallback{position:relative;display:block;border-radius:var(--radius);overflow:hidden}
+.video-fallback img{width:100%;height:auto;display:block;aspect-ratio:16/9;object-fit:cover}
+.video-fallback .playbtn{position:absolute;right:6%;bottom:6%;background:rgba(255,255,255,.92);color:#000;border-radius:999px;padding:.55em 1em;font-weight:800}
+
+/* gallery */
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:.8rem 0}
+.gallery__item{margin:0}
+.gallery__item img{width:100%;height:100%;aspect-ratio:3/2;object-fit:cover;border-radius:10px}
+
+/* CTA */
+.cta{margin:1rem 0 0;text-align:center}
+.cta__btn{display:inline-block;background:var(--brand);color:#000;padding:.8em 1.2em;border-radius:999px;font-weight:800;text-decoration:none}
+.cta__btn:hover{filter:brightness(.95)}
+</style>

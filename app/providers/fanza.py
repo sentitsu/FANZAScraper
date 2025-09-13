@@ -1,12 +1,20 @@
 # app/providers/fanza.py
-import re, json, time, requests
+import re, json, time, requests, os
+from app.core import config
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from app.core.content_builder import ContentBuilder
 from typing import Optional, Dict, Any, List
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from app.core.config import AFFILIATE_ID, IFRAME_SIZE
 
 API_ENDPOINT = "https://api.dmm.com/affiliate/v3/ItemList"
+
+def get_player_size_from_env(default="1280_720"):
+    s = os.getenv("FANZA_IFRAME_SIZE", default)
+    try:
+        w, h = [int(x) for x in s.split("_", 1)]
+        return w, h, round(h / w * 100, 2)
+    except Exception:
+        return 1280, 720, round(720/1280*100, 2)
 
 def parse_aspect_ratio(size_str: str) -> float | None:
     """
@@ -76,7 +84,7 @@ def _extract_trailer_fields(it: dict) -> dict:
       - 直リンク(.mp4/.m3u8)はテンプレには渡さない（規約配慮）
       - 公式 iframe の src があればそれを優先して渡す
     返却:
-      trailer_iframe_src, trailer_poster, trailer_url(None固定)
+      trailer_embed, trailer_poster, trailer_url(None固定)
     """
     # まずは未初期化エラー対策として確実に初期化
     mp4 = None
@@ -86,7 +94,7 @@ def _extract_trailer_fields(it: dict) -> dict:
     # よくあるキーの候補を拾う（あなたのデータ構造に合わせて増やしてOK）
     raw_url   = it.get("trailer_url") or it.get("sampleMovieURL") or it.get("trailer") or ""
     iframe    = (
-        it.get("trailer_iframe_src") or
+        it.get("trailer_embed") or
         it.get("trailerEmbedURL") or
         it.get("sampleMovieEmbed") or
         it.get("embed_url") or
@@ -112,7 +120,7 @@ def _extract_trailer_fields(it: dict) -> dict:
     row = {
         "trailer_url": None,  # 直リンクは使わない
         "trailer_poster": poster,
-        "trailer_iframe_src": iframe or None,
+        "trailer_embed": iframe or None,
     }
 
     # ログ用途（任意）：直リンクが来ていたら警告ログを出したい場合
@@ -327,11 +335,27 @@ def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
 
     row.update(_extract_trailer_fields(it))
 
-    if not row.get("trailer_iframe_src"):
-        auto_src = build_fanza_iframe_src(row.get("cid"), AFFILIATE_ID, IFRAME_SIZE)
-        row["trailer_iframe_src"] = auto_src
+    if not row.get("trailer_embed"):
+        auto_src = build_fanza_iframe_src(
+            row.get("cid"),
+            config.AFFILIATE_ID,
+            config.IFRAME_SIZE,
+        )
+        row["trailer_embed"] = auto_src
 
-    row["aspect_ratio"] = parse_aspect_ratio(IFRAME_SIZE) or 56.25
+    
+    # .env のサイズを反映
+    row["player_width"]  = config.FANZA_IFRAME_W
+    row["player_height"] = config.FANZA_IFRAME_H
+    row["aspect_ratio"]  = config.FANZA_IFRAME_RATIO
+
+    # 既存の size= を確実に .env 値へ
+    if row.get("trailer_embed"):
+        row["trailer_embed"] = re.sub(
+            r"size=\d+_\d+",
+            f"size={config.FANZA_IFRAME_W}_{config.FANZA_IFRAME_H}",
+            row["trailer_embed"]
+        )
 
     if not row.get("trailer_poster"):
         first_sample = (row.get("sample_images") or "").split("|")[0] if row.get("sample_images") else ""
@@ -350,12 +374,12 @@ def sanitize_trailer_fields(item: dict) -> dict:
         item["trailer_url"] = None
 
     # もし既に iframe 用の src が取れているならそれを採用
-    if item.get("trailer_iframe_src"):
+    if item.get("trailer_embed"):
         return item
 
     # ここで “公式の埋め込みURL” をセットする。
-    # 例: アフィ管理画面/APIで得られる iframe src を item["trailer_iframe_src"] に入れる。
+    # 例: アフィ管理画面/APIで得られる iframe src を item["trailer_embed"] に入れる。
     # 取得方法はあなたの環境に合わせて。
-    # item["trailer_iframe_src"] = build_fanza_embed_src(item)  # TODO: 実装
+    # item["trailer_embed"] = build_fanza_embed_src(item)  # TODO: 実装
 
     return item

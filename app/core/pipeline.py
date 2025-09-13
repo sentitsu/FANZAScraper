@@ -2,7 +2,7 @@
 import time, csv
 from typing import Dict, Any, List
 from app.providers.fanza import fetch_items, normalize_item, build_content_html, \
-    _is_now_printing_url_like, _probe_is_placeholder, _pick_best_feature, sanitize_trailer_fields
+    _is_now_printing_url_like, _probe_is_placeholder, _pick_best_feature, sanitize_trailer_fields, get_player_size_from_env
 from app.core.wp_rest import WPClient
 from app.core.filters import apply_filters
 from app.util.logger import log_json
@@ -162,6 +162,16 @@ def run_pipeline(args) -> Dict[str, Any]:
         for it in items:
             # -- 標準化 → 事前フィルタ・補強 --
             row = normalize_item(it)
+
+            W, H, ratio = get_player_size_from_env()
+            row["player_width"] = W
+            row["player_height"] = H
+            row["aspect_ratio"] = ratio  # 例: 56.25
+            
+            # 既存の iframe 埋め込みURL（例: item["trailer_embed"]）の size= を.envに合わせて置換
+            if row.get("trailer_embed"):
+                row["trailer_embed"] = row["trailer_embed"].replace("size=1280_720", f"size={W}_{H}")
+
             row = sanitize_trailer_fields(row)
             row = _filter_and_enhance(row, args)
             if not row:
@@ -247,18 +257,25 @@ def run_pipeline(args) -> Dict[str, Any]:
     # ====== CSV 出力（--outfile 指定時） ======
     if getattr(args, "outfile", None):
         # 既存のカラムを維持。必要なら fieldnames をプロジェクト都合で拡張可。
-        fieldnames = [
+        BASE_FIELDS = [
             "cid", "title", "URL", "date",
             "maker", "actress", "genres",
             "sample_images", "image_large",
             "trailer_url",        # mp4 直リンク（あれば）
             "trailer_youtube",    # YouTube ID/URL（あれば）
             "trailer_poster",     # ポスター画像（あれば）
-            "trailer_iframe_src",
+            "trailer_embed",
             "trailer_embed",      # 生iframe等（通常は空）
             "content",
             "aspect_ratio",
         ]
+        all_keys = set()
+        for r in out_rows:
+            all_keys.update(r.keys())
+
+        fieldnames = [c for c in BASE_FIELDS if c in all_keys] + \
+                    [c for c in all_keys if c not in BASE_FIELDS]  # ← player_width 等も書ける
+
         with open(args.outfile, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=fieldnames)
             w.writeheader()
