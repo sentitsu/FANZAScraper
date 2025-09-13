@@ -174,12 +174,22 @@ def run_pipeline(args) -> Dict[str, Any]:
 
             # -- 本文生成（必要なら）--
             if not no_content:
-                # ContentBuilder があればテンプレ駆動、無ければ従来実装で生成
-                row["content"] = build_content_html(
-                    row,
-                    content_builder=content_builder,
-                    max_gallery=max_gallery,
-                )
+                # まずはテンプレ駆動（ContentBuilder 経由）
+                try:
+                    row["content"] = build_content_html(
+                        row,
+                        content_builder=content_builder,
+                        max_gallery=max_gallery,
+                    )
+                except Exception:
+                    row["content"] = ""
+                # 空なら必ずフォールバック（黒/無表示を回避）
+                if not row.get("content") or not row["content"].strip():
+                    row["content"] = build_content_html(
+                        row,
+                        content_builder=None,   # ←テンプレ無視で従来HTML
+                        max_gallery=max_gallery,
+                    )
 
             # -- CSV バッファ --
             out_rows.append(row)
@@ -187,6 +197,18 @@ def run_pipeline(args) -> Dict[str, Any]:
             # -- 直投稿（任意） --
             if wp:
                 meta_extra = {"provider": "FANZA"}
+
+                # ★ アイキャッチ（ジャケット）を明示設定
+                feat_url = row.get("image_large") or row.get("trailer_poster")
+                feat_id = None
+                if feat_url:
+                    try:
+                        # 同一CIDで毎回同じ名前にしておくとライブラリで識別しやすい
+                        fname = f'{row.get("cid","post")}.jpg'
+                        feat_id = wp.upload_media_from_url(feat_url, fname)
+                    except Exception as e:
+                        log_json("warn", where="upload_media", error=str(e), url=feat_url, cid=row.get("cid"))
+
 
                 if status == "future" and getattr(args, "future_datetime", None):
                     pid, link = wp.create_or_update_post(
@@ -198,6 +220,7 @@ def run_pipeline(args) -> Dict[str, Any]:
                         external_id=row.get("cid", ""),
                         meta_extra=meta_extra,
                         date=args.future_datetime,
+                        featured_media=feat_id,
                     )
                 else:
                     pid, link = wp.create_or_update_post(
@@ -208,6 +231,7 @@ def run_pipeline(args) -> Dict[str, Any]:
                         tags=tag_ids,
                         external_id=row.get("cid", ""),
                         meta_extra=meta_extra,
+                        featured_media=feat_id,
                     )
 
                 log_json("info", action="wp_posted", id=pid, link=link, cid=row.get("cid"))
@@ -223,8 +247,14 @@ def run_pipeline(args) -> Dict[str, Any]:
     if getattr(args, "outfile", None):
         # 既存のカラムを維持。必要なら fieldnames をプロジェクト都合で拡張可。
         fieldnames = [
-            "cid", "title", "URL", "date", "maker", "actress",
-            "genres", "sample_images", "image_large", "content"
+            "cid", "title", "URL", "date",
+            "maker", "actress", "genres",
+            "sample_images", "image_large",
+            "trailer_url",        # mp4 直リンク（あれば）
+            "trailer_youtube",    # YouTube ID/URL（あれば）
+            "trailer_poster",     # ポスター画像（あれば）
+            "trailer_embed",      # 生iframe等（通常は空）
+            "content",
         ]
         with open(args.outfile, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=fieldnames)

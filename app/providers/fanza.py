@@ -2,8 +2,162 @@
 import re, json, time, requests
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from app.core.content_builder import ContentBuilder
+from typing import Optional, Dict, Any, List
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 API_ENDPOINT = "https://api.dmm.com/affiliate/v3/ItemList"
+
+def _guess_preview_mp4_urls(cid: str) -> list[str]:
+    """
+    CID から historical な freepv MP4 URL の候補を生成。
+    例: jufe00582 -> .../freepv/j/juf/jufe00582/jufe00582mhb.mp4
+    派生パターン（接尾辞や _/_w の有無）も網羅。
+    """
+    if not isinstance(cid, str) or not cid:
+        return []
+    m = re.match(r'^([a-z]+)', cid)
+    if not m:
+        return []
+    alpha = m.group(1)              # 'jufe'
+    a1 = alpha[:1]                  # 'j'
+    a3 = alpha[:3]                  # 'juf'  (短い銘柄はそのまま)
+    base = f"https://cc3001.dmm.co.jp/litevideo/freepv/{a1}/{a3}/{cid}/{cid}"
+
+    # よく見かける接尾辞のバリエーション（順序＝優先度）
+    tails = [
+        "mhb.mp4", "dmb.mp4", "dm.mp4", "sm.mp4",
+        "_mhb.mp4", "_dmb.mp4", "_dm.mp4", "_sm.mp4",
+        "mhb_w.mp4", "dmb_w.mp4", "dm_w.mp4", "sm_w.mp4",
+        "_mhb_w.mp4", "_dmb_w.mp4", "_dm_w.mp4", "_sm_w.mp4",
+    ]
+    return [base + t for t in tails]
+
+def _resolve_litevideo_to_mp4(cid: str, timeout: float = 3.0) -> str | None:
+    """
+    freepv MP4 候補に HEAD を打ち、200 かつ video/mp4 っぽいものを返す。
+    見つからなければ None。
+    """
+    for url in _guess_preview_mp4_urls(cid):
+        try:
+            r = requests.head(url, allow_redirects=True, timeout=timeout)
+            if r.status_code == 200:
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                if "video" in ctype and "mp4" in ctype:
+                    return url
+        except Exception:
+            pass
+    return None
+
+def _extract_trailer_fields(it: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """
+    DMM/FANZA レスポンスからトレーラー情報を抽出。
+    1) 既知キー（sampleMovieURL 等）
+    2) だめなら全体を走査して .mp4 / .m3u8 / YouTube を拾う
+    """
+    trailer_url: Optional[str] = None
+    trailer_poster: Optional[str] = None
+    trailer_youtube: Optional[str] = None
+    trailer_embed: Optional[str] = None
+
+    # --- 1) 代表キー（dict or str）
+    smu = (
+        it.get("sampleMovieURL") or it.get("sampleMovieUrl") or it.get("sample_movie_url")
+        or (it.get("iteminfo", {}) or {}).get("sampleMovieURL")
+        or (it.get("iteminfo", {}) or {}).get("sampleMovieUrl")
+        or {}
+    )
+    if isinstance(smu, dict):
+        # 解像度の高い順に
+        for key in ("size_1080", "size_1280_720", "size_720_480", "size_720", "size_560_360", "size_476_306", "url", "mp4"):
+            v = smu.get(key)
+            if isinstance(v, str) and v.strip():
+                trailer_url = v.strip()
+                break
+    elif isinstance(smu, str) and smu.strip():
+        trailer_url = smu.strip()
+
+    # --- 2) 追加の既知フィールド（環境差対応）
+    for k in ("pr_movie", "prMovie", "preview", "trailer", "movie"):
+        if trailer_url:
+            break
+        v = it.get(k)
+        if isinstance(v, str) and v.strip() and v.strip().startswith("http"):
+            trailer_url = v.strip()
+            break
+        if isinstance(v, dict):
+            # よくある "url" キー
+            cand = v.get("url") or v.get("src")
+            if isinstance(cand, str) and cand.strip().startswith("http"):
+                trailer_url = cand.strip()
+                break
+
+    # --- 3) 深掘り走査：アイテム全体からURL候補を拾ってスコアリング
+    def _walk(x, acc: List[str]):
+        if isinstance(x, str):
+            sx = x.strip()
+            lx = sx.lower()
+            if sx.startswith("http") and (".mp4" in lx or ".m3u8" in lx or "youtube.com/" in lx or "youtu.be/" in lx):
+                acc.append(sx)
+        elif isinstance(x, dict):
+            for vv in x.values():
+                _walk(vv, acc)
+        elif isinstance(x, list):
+            for vv in x:
+                _walk(vv, acc)
+
+    if not trailer_url:
+        cands: List[str] = []
+        _walk(it, cands)
+        def _score(u: str) -> int:
+            s = 0
+            ul = u.lower()
+            if ".mp4" in ul: s += 100
+            if ".m3u8" in ul: s += 80
+            if "youtube.com/" in ul or "youtu.be/" in ul: s += 50
+            # 粗い解像度ヒント
+            for hint, pts in (("1080", 20), ("1280", 18), ("720", 15), ("560", 10), ("480", 8), ("360", 5)):
+                if hint in ul: s += pts
+            return s
+        if cands:
+            trailer_url = sorted(cands, key=_score, reverse=True)[0]
+
+    # YouTube は別枠にも入れておく
+    if trailer_url and ("youtube.com/" in trailer_url.lower() or "youtu.be/" in trailer_url.lower()):
+        trailer_youtube = trailer_url
+        # trailer_url は空に（本文側で二重判定しないため）
+        trailer_url = None
+
+    # --- 4) ポスター（大きめ優先）
+    siu = it.get("sampleImageURL") or it.get("sampleImageUrl") or {}
+    if isinstance(siu, dict):
+        for key in ("large", "list", "small"):
+            v = siu.get(key)
+            if isinstance(v, list) and v:
+                if isinstance(v[0], str) and v[0].strip():
+                    trailer_poster = v[0].strip()
+                    break
+            if isinstance(v, str) and v.strip():
+                trailer_poster = v.strip()
+                break
+    if not trailer_poster:
+        for k in ("imageURL", "image_large", "image", "thumb", "jacket", "cover"):
+            vv = it.get(k)
+            if isinstance(vv, str) and vv.strip():
+                trailer_poster = vv.strip()
+                break
+
+    cid = (it.get("content_id") or it.get("cid") or "").strip()
+    if cid and trailer_url and "dmm.co.jp/litevideo/-/part" in trailer_url:
+        mp4 = _resolve_litevideo_to_mp4(cid)
+    if mp4:
+        trailer_url = mp4
+
+    return {
+        "trailer_url": trailer_url,
+        "trailer_poster": trailer_poster,
+        "trailer_youtube": trailer_youtube,
+        "trailer_embed": trailer_embed,
+    }
 
 def build_content_html(row, content_builder: ContentBuilder | None = None, max_gallery: int = 12):
     title   = row.get("title","")
@@ -161,7 +315,7 @@ def _extract_sample_images(it):
     uniq.sort(key=lambda x: (not _is_large_hint(x), x))
     return uniq
 
-def normalize_item(it):
+def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
     cid   = it.get("content_id") or it.get("cid") or ""
     title = it.get("title", "")
     url   = it.get("URL") or it.get("affiliateURL") or ""
@@ -196,7 +350,7 @@ def normalize_item(it):
 
     sample_images = _extract_sample_images(it)
 
-    return {
+    row = {
         "cid": cid,
         "title": title,
         "URL": url,
@@ -207,3 +361,11 @@ def normalize_item(it):
         "sample_images": "|".join(sample_images),
         "image_large": image_large,
     }
+
+    row.update(_extract_trailer_fields(it))
+
+    if not row.get("trailer_poster"):
+        first_sample = (row.get("sample_images") or "").split("|")[0] if row.get("sample_images") else ""
+        row["trailer_poster"] = row.get("image_large") or first_sample or None
+
+    return row

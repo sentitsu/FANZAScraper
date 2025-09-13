@@ -1,25 +1,36 @@
-# app/posting/wp_rest.py
-import base64, time, requests
+# app/core/wp_rest.py
+import base64
+import time
+import requests
 from typing import List, Tuple, Optional
+import os, mimetypes
+from urllib.parse import urlparse
 
 class WPClient:
     def __init__(self, base_url: str, user: str, app_pass: str, timeout=30.0):
         self.base = base_url.rstrip("/")
         token = f"{user}:{app_pass}".encode("utf-8")
-        self.headers = {
-            "Authorization": "Basic " + base64.b64encode(token).decode("ascii"),
+        self.auth = "Basic " + base64.b64encode(token).decode("ascii")
+        self.headers_json = {
+            "Authorization": self.auth,
             "Content-Type": "application/json; charset=utf-8",
         }
         self.timeout = timeout
 
     def _req(self, method: str, path: str, **kw):
         url = f"{self.base}{path}"
+        headers = kw.pop("headers", {})
+        # JSONエンドポイント用の既定ヘッダをマージ
+        for k, v in self.headers_json.items():
+            headers.setdefault(k, v)
+
         for i in range(5):
-            r = requests.request(method, url, headers=self.headers, timeout=self.timeout, **kw)
+            r = requests.request(method, url, headers=headers, timeout=self.timeout, **kw)
             if r.status_code in (429, 500, 502, 503, 504):
                 time.sleep(1.5 * (i + 1))
                 continue
             r.raise_for_status()
+            # 201/200 いずれも JSON を返す
             return r.json()
 
     def _ensure_term(self, tax: str, name: str) -> int:
@@ -36,26 +47,51 @@ class WPClient:
         return [self._ensure_term("tags", n.strip()) for n in names if n.strip()]
 
     def find_post_id_by_external(self, external_id: str) -> Optional[int]:
-        q = f"/wp-json/wp/v2/posts?meta_key=external_id&meta_value={requests.utils.quote(external_id)}&per_page=1&_fields=id"
+        q = f"/wp-json/wp/v2/posts?meta_key=external_id&meta_value={requests.utils.quote(external_id)}&per_page=1&_fields=id,link"
         res = self._req("GET", q)
         if isinstance(res, list) and res:
             return res[0]["id"]
         return None
 
-    def create_or_update_post(self, *, title: str, content: str, status: str,
-                              categories: List[int], tags: List[int],
-                              external_id: str, meta_extra: dict | None = None,
-                              date: str | None = None) -> Tuple[int, str]:
+    def upload_media_from_url(self, url: str, filename: str | None = None) -> int:
+        """
+        画像URLをGET→ /wp-json/wp/v2/media へ multipart でアップロードして添付IDを返す。
+        """
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+
+        path = urlparse(url).path
+        name = filename or (os.path.basename(path) or "image.jpg")
+        ctype = mimetypes.guess_type(name)[0] or "image/jpeg"
+
+        files = {"file": (name, resp.content, ctype)}
+        # multipart では Content-Type を自前で付けない（requests が boundary を付与）
+        headers = {"Authorization": self.auth}
+        r = requests.post(f"{self.base}/wp-json/wp/v2/media",
+                          headers=headers, files=files, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()["id"]
+
+    def create_or_update_post(
+        self, *,
+        title: str, content: str, status: str,
+        categories: List[int], tags: List[int],
+        external_id: str, meta_extra: dict | None = None,
+        date: str | None = None,
+        featured_media: Optional[int] = None
+    ) -> Tuple[int, str]:
         payload = {
             "title": title,
             "content": content,
             "status": status,
-            "categories": categories or [],
-            "tags": tags or [],
-            "meta": {"external_id": external_id} | (meta_extra or {}),
+            "categories": categories,
+            "tags": tags,
+            "meta": {"external_id": external_id, **(meta_extra or {})},
         }
-        if date and status == "future":
-            payload["date"] = date  # ISO 8601
+        if date:
+            payload["date"] = date
+        if featured_media:
+            payload["featured_media"] = featured_media
 
         pid = self.find_post_id_by_external(external_id)
         if pid:

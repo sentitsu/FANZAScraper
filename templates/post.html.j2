@@ -1,59 +1,67 @@
-{# post.html.j2 — rowのキーに合わせ、見やすく整形 #}
 <article class="entry">
+  {% set samples = item.sample_images.split("|") if item.sample_images else [] %}
+  {% set poster = item.trailer_poster or item.image_large or (samples[0] if samples else None) %}
 
-  {# --- メタ情報（縦に並べる） --- #}
+  {# URL整形と判定（Jinjaで安全な書き方） #}
+  {% set tu = item.trailer_url or '' %}
+  {% set tu_l = tu|lower|replace('\n','') %}
+  {% set is_mp4  = (tu_l[-4:] == '.mp4') or ('.mp4?'  in tu_l) %}
+  {% set is_m3u8 = (tu_l[-6:] == '.m3u8') or ('.m3u8?' in tu_l) %}
+
   <ul class="meta">
-    {% if item.maker %}
-      <li><strong>メーカー:</strong> {{ item.maker }}</li>
-    {% endif %}
-    {% if item.actress %}
-      <li><strong>出演:</strong> {{ item.actress }}</li>
-    {% endif %}
-    {% if item.date %}
-      {# "YYYY-MM-DD hh:mm:ss" → "YYYY-MM-DD" に #}
-      {% set _date = item.date.split(" ")[0] if " " in item.date else item.date %}
-      <li><strong>発売日:</strong> {{ _date }}</li>
-    {% endif %}
-    {% if item.cid %}
-      <li><strong>品番:</strong> {{ item.cid }}</li>
-    {% endif %}
-    {% if item.genres %}
-      <li><strong>ジャンル:</strong> {{ item.genres }}</li>
-    {% endif %}
+    {% if item.maker %}<li><strong>メーカー:</strong> {{ item.maker }}</li>{% endif %}
+    {% if item.actress %}<li><strong>出演:</strong> {{ item.actress }}</li>{% endif %}
+    {% if item.date %}{% set _date = item.date.split(" ")[0] if " " in item.date else item.date %}
+      <li><strong>発売日:</strong> {{ _date }}</li>{% endif %}
+    {% if item.cid %}<li><strong>品番:</strong> {{ item.cid }}</li>{% endif %}
+    {% if item.genres %}<li><strong>ジャンル:</strong> {{ item.genres }}</li>{% endif %}
   </ul>
 
-  {# --- メイン画像（大） --- #}
-  {% if item.image_large %}
-    <figure class="lead-image">
-      <img src="{{ item.image_large }}" alt="{{ item.title or '' }}" loading="lazy" decoding="async">
+  {% if is_mp4 %}
+    <figure class="lead-video">
+      <video controls preload="none" playsinline {% if poster %}poster="{{ poster }}"{% endif %}>
+        <source src="{{ item.trailer_url }}" type="video/mp4">
+      </video>
     </figure>
+
+  {% elif is_m3u8 %}
+    {# HLS.js で初期化するためのプレースホルダ。テーマ側JSが src をセットする #}
+    <figure class="lead-video">
+      <video class="hls-player" controls preload="none" playsinline
+             data-src="{{ item.trailer_url }}"
+             {% if poster %}poster="{{ poster }}"{% endif %}></video>
+    </figure>
+
+  {% elif poster %}
+    <a class="video-fallback" href="{{ item.URL }}" target="_blank" rel="sponsored noopener" aria-label="公式ページで動画を見る">
+      <img src="{{ poster }}" alt="{{ item.title or '' }}" loading="lazy" decoding="async">
+      <span class="playbtn">▶</span>
+    </a>
+  {% else %}
+    <p>サンプル動画は <a href="{{ item.URL }}" target="_blank" rel="sponsored noopener">公式ページ</a> でご覧ください。</p>
   {% endif %}
 
-  {# --- ギャラリー（"a|b|c" → 配列化して上限で切る） --- #}
   {% set _max = item._max_gallery|default(12) %}
-  {% set imgs = item.sample_images.split("|") if item.sample_images else [] %}
-  {% if imgs %}
+  {% if samples %}
     <section class="gallery">
-      {% for u in imgs[:_max] %}
-        {% if u %}
-          <figure class="gallery__item"><img src="{{ u }}" alt="{{ item.title or '' }} sample {{ loop.index }}" loading="lazy" decoding="async"></figure>
-        {% endif %}
+      {% for u in samples[:_max] %}
+        {% if u %}<figure class="gallery__item"><img src="{{ u }}" alt="{{ item.title or '' }} sample {{ loop.index }}" loading="lazy" decoding="async"></figure>{% endif %}
       {% endfor %}
     </section>
   {% endif %}
 
-  {# --- アフィリンク --- #}
   {% if item.URL %}
     <p class="cta"><a href="{{ item.URL }}" target="_blank" rel="sponsored noopener">作品ページを見る</a></p>
   {% endif %}
-
 </article>
 
 <style>
-/* お好みで：箇条書きの黒点を消して行間を詰める */
-.entry .meta { list-style: none; padding: 0; margin: 0 0 1em; }
-.entry .meta li { margin: 0.2em 0; }
-.entry .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px,1fr)); gap: 8px; }
-.entry .gallery__item { margin: 0; }
-.entry .lead-image img, .entry .gallery img { height: auto; max-width: 100%; display: block; }
+.entry .meta{list-style:none;margin:0 0 1em;padding:0}
+.entry .meta li{margin:.2em 0}
+.lead-video video{width:100%;max-height:70vh;display:block;background:#000;border-radius:12px}
+.video-fallback{position:relative;display:block;border-radius:12px;overflow:hidden}
+.video-fallback img{width:100%;height:auto;display:block}
+.video-fallback .playbtn{position:absolute;right:8%;bottom:8%;background:rgba(255,255,255,.9);border-radius:999px;padding:.6em 1em;font-weight:700}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.gallery__item{margin:0}
 </style>
