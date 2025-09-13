@@ -4,8 +4,29 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from app.core.content_builder import ContentBuilder
 from typing import Optional, Dict, Any, List
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from app.core.config import AFFILIATE_ID, IFRAME_SIZE
 
 API_ENDPOINT = "https://api.dmm.com/affiliate/v3/ItemList"
+
+def parse_aspect_ratio(size_str: str) -> float | None:
+    """
+    '1280_720' のような文字列から高さ/幅*100 の割合を返す。
+    例: 1280x720 → 56.25 (%)
+    """
+    try:
+        w, h = size_str.split("_")
+        return round((int(h) / int(w)) * 100, 2)
+    except Exception:
+        return None
+
+def build_fanza_iframe_src(cid: str, affiliate_id: str, size: str = "560_360") -> str | None:
+    """
+    FANZA 公式の埋め込み用 iframe src を生成
+    形式: https://www.dmm.co.jp/litevideo/-/part/=/affi_id=XXX/cid=YYY/size=WIDTH_HEIGHT/
+    """
+    if not cid or not affiliate_id:
+        return None
+    return f"https://www.dmm.co.jp/litevideo/-/part/=/affi_id={affiliate_id.strip()}/cid={str(cid).strip()}/size={ (size or '560_360').strip() }/"
 
 def _guess_preview_mp4_urls(cid: str) -> list[str]:
     """
@@ -48,116 +69,58 @@ def _resolve_litevideo_to_mp4(cid: str, timeout: float = 3.0) -> str | None:
             pass
     return None
 
-def _extract_trailer_fields(it: Dict[str, Any]) -> Dict[str, Optional[str]]:
+def _extract_trailer_fields(it: dict) -> dict:
     """
-    DMM/FANZA レスポンスからトレーラー情報を抽出。
-    1) 既知キー（sampleMovieURL 等）
-    2) だめなら全体を走査して .mp4 / .m3u8 / YouTube を拾う
+    予告編系フィールドを抽出する。
+    ポリシー:
+      - 直リンク(.mp4/.m3u8)はテンプレには渡さない（規約配慮）
+      - 公式 iframe の src があればそれを優先して渡す
+    返却:
+      trailer_iframe_src, trailer_poster, trailer_url(None固定)
     """
-    trailer_url: Optional[str] = None
-    trailer_poster: Optional[str] = None
-    trailer_youtube: Optional[str] = None
-    trailer_embed: Optional[str] = None
+    # まずは未初期化エラー対策として確実に初期化
+    mp4 = None
+    m3u8 = None
+    iframe = None
 
-    # --- 1) 代表キー（dict or str）
-    smu = (
-        it.get("sampleMovieURL") or it.get("sampleMovieUrl") or it.get("sample_movie_url")
-        or (it.get("iteminfo", {}) or {}).get("sampleMovieURL")
-        or (it.get("iteminfo", {}) or {}).get("sampleMovieUrl")
-        or {}
+    # よくあるキーの候補を拾う（あなたのデータ構造に合わせて増やしてOK）
+    raw_url   = it.get("trailer_url") or it.get("sampleMovieURL") or it.get("trailer") or ""
+    iframe    = (
+        it.get("trailer_iframe_src") or
+        it.get("trailerEmbedURL") or
+        it.get("sampleMovieEmbed") or
+        it.get("embed_url") or
+        None
     )
-    if isinstance(smu, dict):
-        # 解像度の高い順に
-        for key in ("size_1080", "size_1280_720", "size_720_480", "size_720", "size_560_360", "size_476_306", "url", "mp4"):
-            v = smu.get(key)
-            if isinstance(v, str) and v.strip():
-                trailer_url = v.strip()
-                break
-    elif isinstance(smu, str) and smu.strip():
-        trailer_url = smu.strip()
+    poster = (
+        it.get("trailer_poster") or
+        it.get("image_large") or
+        it.get("imageURL") or
+        None
+    )
 
-    # --- 2) 追加の既知フィールド（環境差対応）
-    for k in ("pr_movie", "prMovie", "preview", "trailer", "movie"):
-        if trailer_url:
-            break
-        v = it.get(k)
-        if isinstance(v, str) and v.strip() and v.strip().startswith("http"):
-            trailer_url = v.strip()
-            break
-        if isinstance(v, dict):
-            # よくある "url" キー
-            cand = v.get("url") or v.get("src")
-            if isinstance(cand, str) and cand.strip().startswith("http"):
-                trailer_url = cand.strip()
-                break
+    # raw_url が文字列で直リンクっぽいかを軽く判定（使わない方針だが監査用に拾っておく）
+    if isinstance(raw_url, str) and raw_url:
+        ul = raw_url.strip().lower()
+        if ul.endswith(".mp4") or (".mp4?" in ul):
+            mp4 = raw_url
+        elif ul.endswith(".m3u8") or (".m3u8?" in ul):
+            m3u8 = raw_url
 
-    # --- 3) 深掘り走査：アイテム全体からURL候補を拾ってスコアリング
-    def _walk(x, acc: List[str]):
-        if isinstance(x, str):
-            sx = x.strip()
-            lx = sx.lower()
-            if sx.startswith("http") and (".mp4" in lx or ".m3u8" in lx or "youtube.com/" in lx or "youtu.be/" in lx):
-                acc.append(sx)
-        elif isinstance(x, dict):
-            for vv in x.values():
-                _walk(vv, acc)
-        elif isinstance(x, list):
-            for vv in x:
-                _walk(vv, acc)
-
-    if not trailer_url:
-        cands: List[str] = []
-        _walk(it, cands)
-        def _score(u: str) -> int:
-            s = 0
-            ul = u.lower()
-            if ".mp4" in ul: s += 100
-            if ".m3u8" in ul: s += 80
-            if "youtube.com/" in ul or "youtu.be/" in ul: s += 50
-            # 粗い解像度ヒント
-            for hint, pts in (("1080", 20), ("1280", 18), ("720", 15), ("560", 10), ("480", 8), ("360", 5)):
-                if hint in ul: s += pts
-            return s
-        if cands:
-            trailer_url = sorted(cands, key=_score, reverse=True)[0]
-
-    # YouTube は別枠にも入れておく
-    if trailer_url and ("youtube.com/" in trailer_url.lower() or "youtu.be/" in trailer_url.lower()):
-        trailer_youtube = trailer_url
-        # trailer_url は空に（本文側で二重判定しないため）
-        trailer_url = None
-
-    # --- 4) ポスター（大きめ優先）
-    siu = it.get("sampleImageURL") or it.get("sampleImageUrl") or {}
-    if isinstance(siu, dict):
-        for key in ("large", "list", "small"):
-            v = siu.get(key)
-            if isinstance(v, list) and v:
-                if isinstance(v[0], str) and v[0].strip():
-                    trailer_poster = v[0].strip()
-                    break
-            if isinstance(v, str) and v.strip():
-                trailer_poster = v.strip()
-                break
-    if not trailer_poster:
-        for k in ("imageURL", "image_large", "image", "thumb", "jacket", "cover"):
-            vv = it.get(k)
-            if isinstance(vv, str) and vv.strip():
-                trailer_poster = vv.strip()
-                break
-
-    cid = (it.get("content_id") or it.get("cid") or "").strip()
-    if cid and trailer_url and "dmm.co.jp/litevideo/-/part" in trailer_url:
-        mp4 = _resolve_litevideo_to_mp4(cid)
-    if mp4:
-        trailer_url = mp4
-
-    return {
-        "trailer_url": trailer_url,
-        "trailer_poster": trailer_poster,
-        "trailer_youtube": trailer_youtube,
-        "trailer_embed": trailer_embed,
+    # 戻り値を一元的に組み立て
+    # ※ 直リンクはテンプレに渡さないため trailer_url は常に None にしておく
+    row = {
+        "trailer_url": None,  # 直リンクは使わない
+        "trailer_poster": poster,
+        "trailer_iframe_src": iframe or None,
     }
+
+    # ログ用途（任意）：直リンクが来ていたら警告ログを出したい場合
+    # if (mp4 or m3u8) and not iframe:
+    #     logger.warning("Detected direct trailer link without iframe: mp4=%s m3u8=%s cid=%s", mp4, m3u8, it.get("cid"))
+
+    return row
+
 
 def build_content_html(row, content_builder: ContentBuilder | None = None, max_gallery: int = 12):
     title   = row.get("title","")
@@ -364,8 +327,35 @@ def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
 
     row.update(_extract_trailer_fields(it))
 
+    if not row.get("trailer_iframe_src"):
+        auto_src = build_fanza_iframe_src(row.get("cid"), AFFILIATE_ID, IFRAME_SIZE)
+        row["trailer_iframe_src"] = auto_src
+
+    row["aspect_ratio"] = parse_aspect_ratio(IFRAME_SIZE) or 56.25
+
     if not row.get("trailer_poster"):
         first_sample = (row.get("sample_images") or "").split("|")[0] if row.get("sample_images") else ""
         row["trailer_poster"] = row.get("image_large") or first_sample or None
 
     return row
+
+def sanitize_trailer_fields(item: dict) -> dict:
+    """直リンク(.mp4/.m3u8)は使わない。iframe用のURLだけ許可。"""
+    def is_direct(url: str) -> bool:
+        u = (url or "").lower()
+        return u.endswith(".mp4") or u.endswith(".m3u8") or (".mp4?" in u) or (".m3u8?" in u)
+
+    # 直リンクは無効化
+    if is_direct(item.get("trailer_url", "")):
+        item["trailer_url"] = None
+
+    # もし既に iframe 用の src が取れているならそれを採用
+    if item.get("trailer_iframe_src"):
+        return item
+
+    # ここで “公式の埋め込みURL” をセットする。
+    # 例: アフィ管理画面/APIで得られる iframe src を item["trailer_iframe_src"] に入れる。
+    # 取得方法はあなたの環境に合わせて。
+    # item["trailer_iframe_src"] = build_fanza_embed_src(item)  # TODO: 実装
+
+    return item

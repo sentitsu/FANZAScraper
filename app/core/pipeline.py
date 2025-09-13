@@ -2,7 +2,7 @@
 import time, csv
 from typing import Dict, Any, List
 from app.providers.fanza import fetch_items, normalize_item, build_content_html, \
-    _is_now_printing_url_like, _probe_is_placeholder, _pick_best_feature
+    _is_now_printing_url_like, _probe_is_placeholder, _pick_best_feature, sanitize_trailer_fields
 from app.core.wp_rest import WPClient
 from app.core.filters import apply_filters
 from app.util.logger import log_json
@@ -162,6 +162,7 @@ def run_pipeline(args) -> Dict[str, Any]:
         for it in items:
             # -- 標準化 → 事前フィルタ・補強 --
             row = normalize_item(it)
+            row = sanitize_trailer_fields(row)
             row = _filter_and_enhance(row, args)
             if not row:
                 continue
@@ -253,8 +254,10 @@ def run_pipeline(args) -> Dict[str, Any]:
             "trailer_url",        # mp4 直リンク（あれば）
             "trailer_youtube",    # YouTube ID/URL（あれば）
             "trailer_poster",     # ポスター画像（あれば）
+            "trailer_iframe_src",
             "trailer_embed",      # 生iframe等（通常は空）
             "content",
+            "aspect_ratio",
         ]
         with open(args.outfile, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=fieldnames)
