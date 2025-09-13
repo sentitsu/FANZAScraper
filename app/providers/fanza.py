@@ -1,6 +1,7 @@
 # app/providers/fanza.py
 import re, json, time, requests, os
 from app.core import config
+from app.core.config import make_aff_url
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from app.core.content_builder import ContentBuilder
 from typing import Optional, Dict, Any, List
@@ -324,6 +325,7 @@ def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
     row = {
         "cid": cid,
         "title": title,
+        "affiliateURL": it.get("affiliateURL") or it.get("affiliate_url") or "",
         "URL": url,
         "date": date,
         "maker": maker,
@@ -360,6 +362,10 @@ def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
     if not row.get("trailer_poster"):
         first_sample = (row.get("sample_images") or "").split("|")[0] if row.get("sample_images") else ""
         row["trailer_poster"] = row.get("image_large") or first_sample or None
+
+    # ★ ここで aff_url を作って注入（ENVは config.make_aff_url が中で読む）
+    base = row.get("affiliateURL") or row.get("URL") or ""
+    row["aff_url"] = make_aff_url(base)
 
     return row
 

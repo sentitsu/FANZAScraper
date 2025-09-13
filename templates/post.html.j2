@@ -18,6 +18,7 @@
   {# iframeサイズ（.env→CSVから入っている想定） #}
   {% set W = item.player_width  or 1280 %}
   {% set H = item.player_height or 720 %}
+  {% set aff_url = item.aff_url %}
 
   {# ---------- 見出し ---------- #}
   {% if item.title %}
@@ -93,9 +94,9 @@
   {% endif %}
 
   {# ---------- CTA ---------- #}
-  {% if item.URL %}
+  {% if aff_url %}
     <p class="cta">
-      <a class="cta__btn" href="{{ item.URL }}" target="_blank" rel="sponsored noopener" itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+      <a class="cta__btn" href="{{ aff_url }}" target="_blank" rel="sponsored noopener" itemprop="offers" itemscope itemtype="https://schema.org/Offer">
         <span itemprop="url">作品ページを見る</span>
       </a>
     </p>
