@@ -46,12 +46,28 @@ class WPClient:
     def ensure_tags(self, names: List[str]) -> List[int]:
         return [self._ensure_term("tags", n.strip()) for n in names if n.strip()]
 
+    from typing import Optional
+
     def find_post_id_by_external(self, external_id: str) -> Optional[int]:
-        q = f"/wp-json/wp/v2/posts?meta_key=external_id&meta_value={requests.utils.quote(external_id)}&per_page=1&_fields=id,link"
+        eid = (external_id or "").strip()
+        if not eid:
+            return None
+        q = (
+            "/wp-json/wp/v2/posts"
+            f"?meta_key=external_id&meta_value={requests.utils.quote(eid)}"
+            "&per_page=10"
+                "&status=publish,draft,future,pending,private"
+            "&context=edit"
+            "&_fields=id,meta,modified"
+        )
         res = self._req("GET", q)
-        if isinstance(res, list) and res:
-            return res[0]["id"]
+        if not isinstance(res, list):
+            return None
+        for p in res:
+            if (p.get("meta") or {}).get("external_id") == eid:  # ← 厳密一致
+                return p["id"]
         return None
+
 
     def upload_media_from_url(self, url: str, filename: str | None = None) -> int:
         """
