@@ -77,6 +77,7 @@ class WPClient:
         title: str, content: str, status: str,
         categories: List[int], tags: List[int],
         external_id: str, meta_extra: dict | None = None,
+        excerpt: Optional[str] = None,
         date: str | None = None,
         featured_media: Optional[int] = None
     ) -> Tuple[int, str]:
@@ -88,6 +89,8 @@ class WPClient:
             "tags": tags,
             "meta": {"external_id": external_id, **(meta_extra or {})},
         }
+        if excerpt:
+            payload["excerpt"] = excerpt
         if date:
             payload["date"] = date
         if featured_media:

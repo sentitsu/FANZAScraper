@@ -8,6 +8,8 @@ from app.core.filters import apply_filters
 from app.util.logger import log_json
 from importlib import import_module
 from app.core.content_builder import ContentBuilder
+import os
+from app.core.seo import build_seo_fields, build_wp_seo_meta
 
 def _is_newer_than(date_str: str, ymd: str | None) -> bool:
     from datetime import datetime
@@ -207,7 +209,9 @@ def run_pipeline(args) -> Dict[str, Any]:
 
             # -- 直投稿（任意） --
             if wp:
-                meta_extra = {"provider": "FANZA"}
+                # --- SEOメタ生成 ---
+                seo = build_seo_fields(row, site_name=os.getenv("SITE_NAME"))
+                meta_extra = {"provider": "FANZA", **build_wp_seo_meta(seo)}
 
                 # ★ アイキャッチ（ジャケット）を明示設定
                 feat_url = row.get("image_large") or row.get("trailer_poster")
@@ -230,6 +234,7 @@ def run_pipeline(args) -> Dict[str, Any]:
                         tags=tag_ids,
                         external_id=row.get("cid", ""),
                         meta_extra=meta_extra,
+                        excerpt=seo.get("description"),
                         date=args.future_datetime,
                         featured_media=feat_id,
                     )
@@ -242,6 +247,7 @@ def run_pipeline(args) -> Dict[str, Any]:
                         tags=tag_ids,
                         external_id=row.get("cid", ""),
                         meta_extra=meta_extra,
+                        excerpt=seo.get("description"),
                         featured_media=feat_id,
                     )
 
@@ -264,7 +270,6 @@ def run_pipeline(args) -> Dict[str, Any]:
             "trailer_url",        # mp4 直リンク（あれば）
             "trailer_youtube",    # YouTube ID/URL（あれば）
             "trailer_poster",     # ポスター画像（あれば）
-            "trailer_embed",
             "trailer_embed",      # 生iframe等（通常は空）
             "content",
             "aspect_ratio",
