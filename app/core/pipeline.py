@@ -1,5 +1,6 @@
 # app/core/pipeline.py
 import time, csv
+import re
 from typing import Dict, Any, List
 from app.providers.fanza import fetch_items, normalize_item, build_content_html, \
     _is_now_printing_url_like, _probe_is_placeholder, _pick_best_feature, sanitize_trailer_fields, get_player_size_from_env
@@ -10,6 +11,13 @@ from importlib import import_module
 from app.core.content_builder import ContentBuilder
 import os
 from app.core.seo import build_seo_fields, build_wp_seo_meta
+
+# --- 女優・ジャンル等を分割する小関数とタグのストップワード ---
+def _split_terms(s: str | None) -> list[str]:
+    """空白/カンマ/読点/中黒/スラッシュで分割してトリム。None→[]。"""
+    return [x.strip() for x in re.split(r"[、,\s/・/]+", (s or "")) if x.strip()]
+
+TAG_STOPWORDS = set(["ハイビジョン", "サンプル", "動画", "独占配信"])
 
 def _is_newer_than(date_str: str, ymd: str | None) -> bool:
     from datetime import datetime
@@ -224,14 +232,43 @@ def run_pipeline(args) -> Dict[str, Any]:
                     except Exception as e:
                         log_json("warn", where="upload_media", error=str(e), url=feat_url, cid=row.get("cid"))
 
+                # --- 作品ごとのカテゴリ（女優）とタグを算出 ---
+                actresses = _split_terms(row.get("actress"))
+                if actresses:
+                    # カテゴリは“女優名のカテゴリ”を1つだけ付ける（ナビ崩れ防止）
+                    cat_ids_for_post = wp.ensure_categories([actresses[0]])
+                else:
+                    cat_ids_for_post = cat_ids or []
+
+                base_tag_names = [s.strip() for s in (args.wp_tags or "").split(",") if s.strip()]
+
+                dyn_tag_names = []
+                # 女優はタグとしても付与（テーマ側の横断検索に有利）
+                dyn_tag_names += actresses
+                # ジャンル（複数）からノイズ語を除外
+                dyn_tag_names += [g for g in _split_terms(row.get("genres")) if g not in TAG_STOPWORDS]
+                # 単一値系
+                for key in ("maker", "label", "series"):
+                    v = (row.get(key) or "").strip()
+                    if v:
+                        dyn_tag_names.append(v)
+
+                # 重複除去＋上限
+                seen = set(); merged_tag_names = []
+                for t in base_tag_names + dyn_tag_names:
+                    if t and t not in seen:
+                        seen.add(t); merged_tag_names.append(t)
+                merged_tag_names = merged_tag_names[:15]
+
+                tag_ids_for_post = wp.ensure_tags(merged_tag_names)
 
                 if status == "future" and getattr(args, "future_datetime", None):
                     pid, link = wp.create_or_update_post(
                         title=row.get("title", ""),
                         content=row.get("content", ""),
                         status="future",
-                        categories=cat_ids,
-                        tags=tag_ids,
+                        categories=cat_ids_for_post,
+                        tags=tag_ids_for_post,
                         external_id=row.get("cid", ""),
                         meta_extra=meta_extra,
                         excerpt=seo.get("description"),
@@ -243,8 +280,8 @@ def run_pipeline(args) -> Dict[str, Any]:
                         title=row.get("title", ""),
                         content=row.get("content", ""),
                         status=status,
-                        categories=cat_ids,
-                        tags=tag_ids,
+                        categories=cat_ids_for_post,
+                        tags=tag_ids_for_post,
                         external_id=row.get("cid", ""),
                         meta_extra=meta_extra,
                         excerpt=seo.get("description"),
