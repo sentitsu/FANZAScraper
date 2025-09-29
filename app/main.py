@@ -86,6 +86,15 @@ def build_args():
     # 出力
     ap.add_argument("--outfile", default="out/fanza_items.csv")
 
+    # NEW: 既存CSV（outfileのディレクトリ配下 *.csv）を総なめしてCIDを自動スキップ
+    ap.add_argument("--auto-skip-outputs", action="store_true",
+                    help="outfile のフォルダ配下の既存CSVから cid を読み、処理前にスキップする")
+
+    ap.add_argument("--target-new", type=int, default=0,
+                    help="新規処理（WP新規作成 or CSV追加）の目標件数。0なら無効")
+    ap.add_argument("--no-update-existing", action="store_true",
+                    help="WPに既存記事がある場合は更新せずスキップする")
+
     # WordPress（REST直投稿）
     ap.add_argument("--wp-post", action="store_true")
     ap.add_argument("--wp-url", default=os.getenv("WP_URL"))

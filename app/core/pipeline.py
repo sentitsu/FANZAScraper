@@ -11,6 +11,7 @@ from importlib import import_module
 from app.core.content_builder import ContentBuilder
 import os
 from app.core.seo import build_seo_fields, build_wp_seo_meta
+from app.core.csv_dedupe import load_skip_cids, append_ledger, load_skip_cids_in_dir
 
 # --- 女優・ジャンル等を分割する小関数とタグのストップワード ---
 def _split_terms(s: str | None) -> list[str]:
@@ -152,10 +153,33 @@ def run_pipeline(args) -> Dict[str, Any]:
 
     out_rows: List[Dict[str, Any]] = []
     offset, got = 1, 0
+    # 新規件数の目標/カウンタ
+    target_new: int = int(getattr(args, "target_new", 0) or 0)
+    new_count: int = 0
+    # 既存を更新しない運用
+    no_update_existing: bool = bool(getattr(args, "no_update_existing", False))
     debug_dumped = False
 
+    ledger_path = getattr(args, "ledger", None)
+
+    # 起動時にスキップCID集合を準備
+    skip_cids = set()
+    # A) 互換: 既存の --skip-from-csv / --skip-csv-col が来ていたら尊重
+    _from_csv = getattr(args, "skip_from_csv", None)
+    if _from_csv:
+        skip_cids |= load_skip_cids(_from_csv, colname=getattr(args, "skip_csv_col", "cid"))
+    # B) 新規: --auto-skip-outputs が有効なら、outfile のフォルダ（無ければ ./out）を総なめ
+    if getattr(args, "auto_skip_outputs", False):
+        import os
+        base_dir = None
+        if getattr(args, "outfile", None):
+            base_dir = os.path.dirname(args.outfile) or "."
+        if not base_dir:
+            base_dir = "out"
+        skip_cids |= load_skip_cids_in_dir(base_dir, "*.csv")
+
     # ====== 取得ループ ======
-    while got < args.max:
+    while got < args.max and (target_new == 0 or new_count < target_new):
         data = fetch_items(args.api_id, args.affiliate_id, params, start=offset, hits=args.hits)
         result = data.get("result") or {}
         items = result.get("items") or []
@@ -181,6 +205,11 @@ def run_pipeline(args) -> Dict[str, Any]:
             # 既存の iframe 埋め込みURL（例: item["trailer_embed"]）の size= を.envに合わせて置換
             if row.get("trailer_embed"):
                 row["trailer_embed"] = row["trailer_embed"].replace("size=1280_720", f"size={W}_{H}")
+
+            # NEW: CSVベースの重複スキップ（cid が既にCSVに存在していたら処理しない）
+            cid = (row.get("cid") or "").strip()
+            if cid and cid in skip_cids:
+                continue
 
             row = sanitize_trailer_fields(row)
             row = _filter_and_enhance(row, args)
@@ -212,11 +241,35 @@ def run_pipeline(args) -> Dict[str, Any]:
                         max_gallery=max_gallery,
                     )
 
-            # -- CSV バッファ --
-            out_rows.append(row)
+            # -- CSV運用（WPなし）の“新規”定義：skip_cids に無い → 新規として採用
+            #    out_rows に入れたら new_count を加算
+            if not wp:
+                out_rows.append(row)
+                if target_new:
+                    new_count += 1
+                if ledger_path:
+                    try:
+                        import datetime as _dt
+                        row_for_ledger = dict(row)
+                        row_for_ledger["exported_at"] = _dt.datetime.utcnow().isoformat()
+                        append_ledger(ledger_path, row_for_ledger)
+                    except Exception as _e:
+                        log_json("warn", where="append_ledger", error=str(_e), cid=row.get("cid"))
+                continue  # WPなしはここで次のアイテムへ
 
             # -- 直投稿（任意） --
             if wp:
+                # 事前に“既存かどうか”を判定（更新しない運用/新規カウントに使う）
+                existing_pid = None
+                try:
+                    existing_pid = wp.find_post_id_by_external(cid) if cid else None
+                except Exception:
+                    existing_pid = None
+
+                # 既存を更新しないフラグが立っていて、既存ヒット → スキップ
+                if no_update_existing and existing_pid:
+                    continue
+                
                 # --- SEOメタ生成 ---
                 seo = build_seo_fields(row, site_name=os.getenv("SITE_NAME"))
                 meta_extra = {"provider": "FANZA", **build_wp_seo_meta(seo)}
@@ -293,6 +346,20 @@ def run_pipeline(args) -> Dict[str, Any]:
                         excerpt=seo.get("description"),
                         featured_media=feat_id,
                     )
+
+                # “新規”だったらカウント（既存→更新のケースは加算しない）
+                if target_new and pid and not existing_pid:
+                    new_count += 1
+
+                # NEW: WP投稿が成功した分だけ ledger に posted_at 付きで記帳
+                try:
+                    if ledger_path and pid:
+                        import datetime as _dt
+                        row_for_ledger = dict(row)
+                        row_for_ledger["posted_at"] = _dt.datetime.utcnow().isoformat()
+                        append_ledger(ledger_path, row_for_ledger)
+                except Exception as _e:
+                    log_json("warn", where="append_ledger", error=str(_e), cid=row.get("cid"))
 
                 log_json("info", action="wp_posted", id=pid, link=link, cid=row.get("cid"))
 

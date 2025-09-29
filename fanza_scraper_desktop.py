@@ -156,6 +156,14 @@ class App(tk.Tk):
         self.var_gte = tk.StringVar()
         self.var_lte = tk.StringVar()
 
+        # NEW: 自動スキップ（出力フォルダの既存CSVからCID収集）
+        self.var_auto_skip_outputs = tk.BooleanVar(value=True)
+        self.var_ledger        = tk.StringVar()
+
+        # NEW: 新規N件＋既存は更新しない
+        self.var_target_new = tk.IntVar(value=0)
+        self.var_no_update_existing = tk.BooleanVar(value=False)
+
         topA = ttk.LabelFrame(tab_basic, text="取得条件")
         topA.pack(fill=tk.X, padx=6, pady=6)
         add_labeled_entry(topA, "site", self.var_site)
@@ -200,6 +208,27 @@ class App(tk.Tk):
         ttk.Checkbutton(topC, text="プレースホルダ除外 (--skip-placeholder)", variable=self.var_skip_placeholder).pack(side=tk.LEFT, padx=6)
         ttk.Label(topC, text="最小サンプル枚数 (--min-samples)").pack(side=tk.LEFT, padx=(12, 6))
         ttk.Spinbox(topC, from_=0, to=50, textvariable=self.var_min_samples, width=6).pack(side=tk.LEFT)
+
+        # NEW: 重複スキップ / 台帳
+        topD = ttk.LabelFrame(tab_basic, text="重複スキップ / 台帳")
+        topD.pack(fill=tk.X, padx=6, pady=6)
+        # auto-skip-outputs
+        rowd1 = ttk.Frame(topD); rowd1.pack(fill=tk.X, pady=4)
+        ttk.Checkbutton(rowd1, text="すでに出力済みCSVから自動スキップ (--auto-skip-outputs)",
+                        variable=self.var_auto_skip_outputs).pack(side=tk.LEFT)
+        # ledger
+        rowd2 = ttk.Frame(topD); rowd2.pack(fill=tk.X, pady=4)
+        ttk.Label(rowd2, text="Ledger CSV (--ledger)").pack(side=tk.LEFT)
+        ent_ledger = ttk.Entry(rowd2, textvariable=self.var_ledger)
+        ent_ledger.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
+        ttk.Button(rowd2, text="参照…", command=self._browse_ledger).pack(side=tk.LEFT)
+
+        # NEW: 目標新規数＆既存更新オプション
+        row3 = ttk.Frame(topB); row3.pack(fill=tk.X, pady=4)
+        ttk.Label(row3, text="新規が N 件たまるまで (--target-new)").pack(side=tk.LEFT)
+        ttk.Spinbox(row3, from_=0, to=1000, textvariable=self.var_target_new, width=8).pack(side=tk.LEFT, padx=(6, 12))
+        ttk.Checkbutton(row3, text="既存は更新しない (--no-update-existing)",
+                        variable=self.var_no_update_existing).pack(side=tk.LEFT)
 
         # ---------- フィルタ ----------
         self.var_inc_maker = tk.StringVar()
@@ -354,6 +383,18 @@ class App(tk.Tk):
             "--outfile", self.var_outfile.get()
         ]
 
+        # NEW: 新規N件・既存は更新しない
+        if self.var_target_new.get() > 0:
+            cmd += ["--target-new", str(self.var_target_new.get())]
+        if self.var_no_update_existing.get():
+            cmd += ["--no-update-existing"]
+
+        # NEW: 自動スキップ / 台帳
+        if self.var_auto_skip_outputs.get():
+            cmd += ["--auto-skip-outputs"]
+        if self.var_ledger.get().strip():
+            cmd += ["--ledger", self.var_ledger.get().strip()]
+
         if self.var_site.get().strip():
             cmd += ["--site", self.var_site.get().strip()]
         if self.var_service.get().strip():
@@ -487,6 +528,15 @@ class App(tk.Tk):
     def _on_proc_exit(self, code: int | None):
         self._append_log(f"[EXIT] returncode={code}")
         self.btn_run.config(state=tk.NORMAL)
+
+    def _browse_ledger(self):
+        path = filedialog.asksaveasfilename(
+            title="Ledger CSV を保存",
+            defaultextension=".csv",
+            filetypes=[("CSV", ".csv"), ("All Files", "*.*")]
+        )
+        if path:
+            self.var_ledger.set(path)
 
 def main():
     app = App()
