@@ -1,11 +1,12 @@
 {# ============================================
    改良版 Post テンプレート (Jinja2) — javmix-av.com
    目的: 収益/UX/SEO(A11y/構造化データ)を総合強化
+   方針: has_offer=False（= 商品系は出さない）。構造化データは VideoObject のみ。
    想定: WordPress + FANZAScraper 生成HTMLとして本文に挿入
    注意: HLS再生(hls.js)はテーマ/共通JSで1度だけ読み込み推奨
    ============================================ #}
 
-<article class="entry" itemscope itemtype="https://schema.org/Product">
+<article class="entry">
   {# ---------- 事前整形 ---------- #}
   {% set samples = item.sample_images.split("|") if item.sample_images else [] %}
   {% set poster  = item.trailer_poster or item.image_large or (samples[0] if samples else None) %}
@@ -23,20 +24,18 @@
   {# ---------- 見出し ---------- #}
   {% if item.title %}
     <header class="entry__header">
-      <h1 class="entry__title" itemprop="name">{{ item.title }}</h1>
-      {% if item.cid %}<meta itemprop="sku" content="{{ item.cid }}">{% endif %}
-      {% if item.URL %}<link itemprop="url" href="{{ item.URL }}">{% endif %}
+      <h1 class="entry__title">{% if item.cid %}[{{ item.cid }}] {% endif %}{{ item.title }}</h1>
     </header>
   {% endif %}
 
   {# ---------- メタ情報 ---------- #}
   <section class="entry__meta" aria-label="作品情報">
     <dl class="meta">
-      {% if item.maker %}<div class="meta__row"><dt>メーカー</dt><dd itemprop="brand">{{ item.maker }}</dd></div>{% endif %}
-      {% if item.actress %}<div class="meta__row"><dt>出演</dt><dd itemprop="actor">{{ item.actress }}</dd></div>{% endif %}
-      {% if _date %}<div class="meta__row"><dt>発売日</dt><dd><time datetime="{{ _date }}" itemprop="releaseDate">{{ _date }}</time></dd></div>{% endif %}
+      {% if item.maker %}<div class="meta__row"><dt>メーカー</dt><dd>{{ item.maker }}</dd></div>{% endif %}
+      {% if item.actress %}<div class="meta__row"><dt>出演</dt><dd>{{ item.actress }}</dd></div>{% endif %}
+      {% if _date %}<div class="meta__row"><dt>発売日</dt><dd><time datetime="{{ _date }}">{{ _date }}</time></dd></div>{% endif %}
       {% if item.cid %}<div class="meta__row"><dt>品番</dt><dd><code>{{ item.cid }}</code></dd></div>{% endif %}
-      {% if item.genres %}<div class="meta__row"><dt>ジャンル</dt><dd itemprop="genre">{{ item.genres }}</dd></div>{% endif %}
+      {% if item.genres %}<div class="meta__row"><dt>ジャンル</dt><dd>{{ item.genres }}</dd></div>{% endif %}
     </dl>
   </section>
 
@@ -52,10 +51,7 @@
     </div>
 
   {% elif is_mp4 %}
-    <figure class="lead-media" itemprop="hasVideo" itemscope itemtype="https://schema.org/VideoObject">
-      <meta itemprop="name" content="{{ item.title or '' }} 予告編">
-      {% if poster %}<meta itemprop="thumbnailUrl" content="{{ poster }}">{% endif %}
-      {% if item.URL %}<meta itemprop="url" content="{{ item.URL }}">{% endif %}
+    <figure class="lead-media">
       <video class="lead-media__video" controls preload="none" playsinline {% if poster %}poster="{{ poster }}"{% endif %}>
         <source src="{{ item.trailer_url }}" type="video/mp4">
       </video>
@@ -63,10 +59,7 @@
     </figure>
 
   {% elif is_m3u8 %}
-    <figure class="lead-media" itemprop="hasVideo" itemscope itemtype="https://schema.org/VideoObject">
-      <meta itemprop="name" content="{{ item.title or '' }} 予告編(HLS)">
-      {% if poster %}<meta itemprop="thumbnailUrl" content="{{ poster }}">{% endif %}
-      {% if item.URL %}<meta itemprop="url" content="{{ item.URL }}">{% endif %}
+    <figure class="lead-media">
       <video class="lead-media__video hls-player" controls preload="none" playsinline data-src="{{ item.trailer_url }}" {% if poster %}poster="{{ poster }}"{% endif %}></video>
       {% if item.title %}<figcaption class="lead-media__cap">{{ item.title }} — 予告編</figcaption>{% endif %}
     </figure>
@@ -80,52 +73,91 @@
     </figure>
   {% endif %}
 
+  {# ---------- CTA（1個だけ） ---------- #}
+  {% if aff_url %}
+    <p class="cta">
+      <a class="cta__btn" href="{{ aff_url }}" target="_blank" rel="sponsored noopener">
+        <span>作品ページを見る</span>
+      </a>
+    </p>
+  {% endif %}
+
   {# ---------- ギャラリー ---------- #}
   {% if samples %}
     <section class="gallery" aria-label="サンプル画像">
       {% for u in samples[:_max] %}
         {% if u %}
           <figure class="gallery__item">
-            <img src="{{ u }}" alt="{{ item.title or '' }} サンプル {{ loop.index }}" loading="lazy" decoding="async" itemprop="image">
+            <img src="{{ u }}" alt="{{ item.title or '' }} サンプル {{ loop.index }}" loading="lazy" decoding="async">
           </figure>
         {% endif %}
       {% endfor %}
     </section>
   {% endif %}
 
-  {# ---------- CTA ---------- #}
-  {% if aff_url %}
-    <p class="cta">
-      <a class="cta__btn" href="{{ aff_url }}" target="_blank" rel="sponsored noopener" itemprop="offers" itemscope itemtype="https://schema.org/Offer">
-        <span itemprop="url">作品ページを見る</span>
-      </a>
-    </p>
+  {# ---------- JSON-LD (構造化データ：VideoObject のみ) ---------- #}
+  {% if is_mp4 or is_m3u8 or poster %}
+    {# poster が dict {large,list,small} の場合に URL へ正規化。空なら samples[0] にフォールバック #}
+    {% set thumb = None %}
+    {% if poster %}
+      {% if poster is mapping %}
+        {% set thumb = poster.large or poster.list or poster.small %}
+      {% else %}
+        {% set thumb = poster %}
+      {% endif %}
+    {% endif %}
+    {% if not thumb and samples %}{% set thumb = samples[0] %}{% endif %}
+
+    {% set video = {
+      "@context":"https://schema.org",
+      "@type":"VideoObject",
+      "name": (item.title or "") ~ " 予告編",
+      "description": item.description or item.title or ""
+    } %}
+    {% if thumb %}{% set _ = video.update({"thumbnailUrl": thumb}) %}{% endif %}
+
+    {# uploadDate は ISO日時を最優先。無ければ日付→00:00:00+09:00 に正規化 #}
+    {% set tz = site_tz or '+09:00' %}  {# 環境に合わせて。日本なら +09:00 #}
+    {% if item.date_iso %}
+      {% set upload_iso = item.date_iso %}
+    {% elif _date %}
+      {% set upload_iso = _date ~ 'T00:00:00' ~ tz %}
+    {% else %}
+      {% set upload_iso = None %}
+    {% endif %}
+    {% if upload_iso %}{% set _ = video.update({"uploadDate": upload_iso}) %}{% endif %}
+
+    {# 実体があれば contentUrl、無ければ embedUrl #}
+    {% if item.trailer_url %}
+      {% set _ = video.update({"contentUrl": item.trailer_url}) %}
+    {% elif item.trailer_embed %}
+      {% set _ = video.update({"embedUrl": item.trailer_embed}) %}
+    {% endif %}
+
+    {% if item.URL %}{% set _ = video.update({"url": item.URL}) %}{% endif %}
+
+    {# duration は 0 秒は出さない #}
+    {% if item.trailer_duration and item.trailer_duration|int > 0 %}
+      {% set dur = item.trailer_duration|int %}
+      {% set h = (dur // 3600)|int %}
+      {% set m = ((dur % 3600) // 60)|int %}
+      {% set s = (dur % 60)|int %}
+      {% set dur_iso = 'PT' ~ (h ~ 'H' if h) ~ (m ~ 'M' if (h or m)) ~ s ~ 'S' %}
+      {% set _ = video.update({"duration": dur_iso}) %}
+    {% endif %}
+
+    {% if site_name and site_logo_url %}
+      {% set _ = video.update({
+        "publisher": {
+          "@type": "Organization",
+          "name": site_name,
+          "logo": { "@type": "ImageObject", "url": site_logo_url }
+        }
+      }) %}
+    {% endif %}
+    <script type="application/ld+json">{{ video | tojson }}</script>
   {% endif %}
 
-  {# ---------- JSON-LD (構造化データ) ---------- #}
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "Product",
-    {% if item.title %}"name": {{ item.title|tojson }},{% endif %}
-    {% if poster %}"image": {{ poster|tojson }},{% endif %}
-    {% if item.description %}"description": {{ item.description|tojson }},{% endif %}
-    {% if item.cid %}"sku": {{ item.cid|tojson }},{% endif %}
-    {% if item.genres %}"category": {{ item.genres|tojson }},{% endif %}
-    {% if item.maker %}"brand": {"@type": "Brand", "name": {{ item.maker|tojson }}},{% endif %}
-    {% if _date %}"releaseDate": {{ _date|tojson }},{% endif %}
-    {% if item.URL %}"url": {{ item.URL|tojson }},{% endif %}
-    {% if is_mp4 or is_m3u8 %}
-    "hasVideo": {
-      "@type": "VideoObject",
-      "name": {{ (item.title ~ ' 予告編')|tojson }},
-      {% if poster %}"thumbnailUrl": {{ poster|tojson }},{% endif %}
-      {% if item.trailer_url %}"contentUrl": {{ item.trailer_url|tojson }},{% endif %}
-      {% if _date %}"uploadDate": {{ _date|tojson }}{% endif %}
-    }
-    {% endif %}
-  }
-  </script>
 </article>
 
 {# ---------- HLS 初期化(必要時のみ) ---------- #}
@@ -200,7 +232,6 @@
 .gallery__item{margin:0}
 .gallery__item img{width:100%;height:100%;aspect-ratio:3/2;object-fit:cover;border-radius:10px}
 
-/* CTA */
 /* CTA */
 .cta{
   margin:1.2rem 0 0;

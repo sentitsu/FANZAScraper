@@ -262,9 +262,15 @@ def run_pipeline(args) -> Dict[str, Any]:
 
                 tag_ids_for_post = wp.ensure_tags(merged_tag_names)
 
+                # 品番つきタイトル（WP投稿用）
+                def _fmt_title(r):
+                    cid = (r.get("cid") or "").strip()
+                    t   = (r.get("title") or "").strip()
+                    return f"[{cid}] {t}" if cid else t
+
                 if status == "future" and getattr(args, "future_datetime", None):
                     pid, link = wp.create_or_update_post(
-                        title=row.get("title", ""),
+                        title=_fmt_title(row),
                         content=row.get("content", ""),
                         status="future",
                         categories=cat_ids_for_post,
@@ -277,7 +283,7 @@ def run_pipeline(args) -> Dict[str, Any]:
                     )
                 else:
                     pid, link = wp.create_or_update_post(
-                        title=row.get("title", ""),
+                        title=_fmt_title(row),
                         content=row.get("content", ""),
                         status=status,
                         categories=cat_ids_for_post,
