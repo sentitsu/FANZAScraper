@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any, Tuple, List
 from jinja2 import Environment, FileSystemLoader, select_autoescape, TemplateNotFound
+import json
+from urllib.parse import quote_plus, urlsplit
 
 try:
     import markdown2  # optional（.mdテンプレートをHTML化したい場合）
@@ -30,6 +32,16 @@ def _search_roots() -> List[str]:
         str((here.parent / "templates").resolve()),
     ]))
 
+def _register_filters(env: Environment) -> None:
+    """Jinja環境にカスタムフィルタを登録"""
+    # JSON を安全に出力（日本語はそのまま、</script> 破断も回避したければ追加処理してOK）
+    env.filters["tojson"] = lambda x: json.dumps(x, ensure_ascii=False)
+
+    # URLエンコード（None 安全化）
+    env.filters["urlencode"] = lambda s: quote_plus("" if s is None else str(s))
+
+    # 以前テンプレが使っていた urlsplit（netloc 等を取りたい場合に備えて）
+    env.filters["urlsplit"] = urlsplit
 
 def _make_env_and_name(path_like: Optional[str]) -> Tuple[Optional[Environment], Optional[str]]:
     """
@@ -55,6 +67,7 @@ def _make_env_and_name(path_like: Optional[str]) -> Tuple[Optional[Environment],
             trim_blocks=True,
             lstrip_blocks=True,
         )
+        _register_filters(env)
         return env, name
 
     # ファイル名だけ → 複数の候補ディレクトリ＋/templates を試す
@@ -73,9 +86,9 @@ def _make_env_and_name(path_like: Optional[str]) -> Tuple[Optional[Environment],
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    _register_filters(env)
     name = path_like
     return env, name
-
 
 class ContentBuilder:
     def __init__(

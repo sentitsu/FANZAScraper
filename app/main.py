@@ -104,6 +104,8 @@ def build_args():
     ap.add_argument("--wp-tags", default=os.getenv("WP_TAGS", ""))
     ap.add_argument("--publish", action="store_true")           # 即時公開
     ap.add_argument("--future-datetime", default=None)          # 予約投稿 (ISO: 2025-09-11T21:00:00)
+
+    ap.add_argument('--mirror-images', action='store_true', help='Download poster/sample images to WP media and replace URLs')
     return ap
 
 

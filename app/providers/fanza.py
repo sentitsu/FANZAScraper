@@ -48,12 +48,10 @@ def _guess_preview_mp4_urls(cid: str) -> list[str]:
     m = re.match(r'^([a-z]+)', cid)
     if not m:
         return []
-    alpha = m.group(1)              # 'jufe'
-    a1 = alpha[:1]                  # 'j'
-    a3 = alpha[:3]                  # 'juf'  (短い銘柄はそのまま)
+    alpha = m.group(1)
+    a1 = alpha[:1]
+    a3 = alpha[:3]
     base = f"https://cc3001.dmm.co.jp/litevideo/freepv/{a1}/{a3}/{cid}/{cid}"
-
-    # よく見かける接尾辞のバリエーション（順序＝優先度）
     tails = [
         "mhb.mp4", "dmb.mp4", "dm.mp4", "sm.mp4",
         "_mhb.mp4", "_dmb.mp4", "_dm.mp4", "_sm.mp4",
@@ -63,10 +61,7 @@ def _guess_preview_mp4_urls(cid: str) -> list[str]:
     return [base + t for t in tails]
 
 def _resolve_litevideo_to_mp4(cid: str, timeout: float = 3.0) -> str | None:
-    """
-    freepv MP4 候補に HEAD を打ち、200 かつ video/mp4 っぽいものを返す。
-    見つからなければ None。
-    """
+    """freepv MP4 候補に HEAD を打ち、200 かつ video/mp4 っぽいものを返す。"""
     for url in _guess_preview_mp4_urls(cid):
         try:
             r = requests.head(url, allow_redirects=True, timeout=timeout)
@@ -80,21 +75,15 @@ def _resolve_litevideo_to_mp4(cid: str, timeout: float = 3.0) -> str | None:
 
 def _extract_trailer_fields(it: dict) -> dict:
     """
-    予告編系フィールドを抽出する。
-    ポリシー:
-      - 直リンク(.mp4/.m3u8)はテンプレには渡さない（規約配慮）
-      - 公式 iframe の src があればそれを優先して渡す
-    返却:
-      trailer_embed, trailer_poster, trailer_url(None固定)
+    予告編系フィールドを抽出。直リンク(.mp4/.m3u8)はテンプレには渡さない。
+    返却: trailer_embed, trailer_poster, trailer_url(None固定)
     """
-    # まずは未初期化エラー対策として確実に初期化
     mp4 = None
     m3u8 = None
     iframe = None
 
-    # よくあるキーの候補を拾う（あなたのデータ構造に合わせて増やしてOK）
-    raw_url   = it.get("trailer_url") or it.get("sampleMovieURL") or it.get("trailer") or ""
-    iframe    = (
+    raw_url = it.get("trailer_url") or it.get("sampleMovieURL") or it.get("trailer") or ""
+    iframe  = (
         it.get("trailer_embed") or
         it.get("trailerEmbedURL") or
         it.get("sampleMovieEmbed") or
@@ -108,7 +97,6 @@ def _extract_trailer_fields(it: dict) -> dict:
         None
     )
 
-    # raw_url が文字列で直リンクっぽいかを軽く判定（使わない方針だが監査用に拾っておく）
     if isinstance(raw_url, str) and raw_url:
         ul = raw_url.strip().lower()
         if ul.endswith(".mp4") or (".mp4?" in ul):
@@ -116,18 +104,11 @@ def _extract_trailer_fields(it: dict) -> dict:
         elif ul.endswith(".m3u8") or (".m3u8?" in ul):
             m3u8 = raw_url
 
-    # 戻り値を一元的に組み立て
-    # ※ 直リンクはテンプレに渡さないため trailer_url は常に None にしておく
     row = {
         "trailer_url": None,  # 直リンクは使わない
         "trailer_poster": poster,
         "trailer_embed": iframe or None,
     }
-
-    # ログ用途（任意）：直リンクが来ていたら警告ログを出したい場合
-    # if (mp4 or m3u8) and not iframe:
-    #     logger.warning("Detected direct trailer link without iframe: mp4=%s m3u8=%s cid=%s", mp4, m3u8, it.get("cid"))
-
     return row
 
 
@@ -138,16 +119,39 @@ def build_content_html(row, content_builder: ContentBuilder | None = None, max_g
     genres  = row.get("genres","")
     url     = row.get("URL","")
     jacket  = row.get("image_large","") or ""
-    samples = [u for u in (row.get("sample_images","").split("|") if row.get("sample_images") else []) if u][:max_gallery]
+    samples = [u for u in (row.get("sample_images","").split("|") if row.get("sample_images") else []) if u]
 
-    # テンプレ駆動（指定時）
     if content_builder:
         item = dict(row)
         item["_max_gallery"] = max_gallery
         return content_builder.render(item)
 
-    # フォールバック（従来HTML）
-    def img(u): return f'<img src="{u}" loading="lazy" decoding="async" alt="{title}">' if u else ""
+    if jacket:
+        samples = [u for u in samples if u != jacket]
+
+    import os as _os, re as _re
+    def _score2(x:str)->int:
+        s=x.lower(); return (2 if s.endswith("pl.jpg") else 0) + (1 if "jp-" in s else 0)
+    def _key2(x:str)->str:
+        b=_os.path.basename(x)
+        b=_re.sub(r'js-(\d+)\.(jpg|jpeg|png|webp)$', r'\1.jpg', b, flags=_re.I)
+        b=_re.sub(r'jp-(\d+)\.(jpg|jpeg|png|webp)$', r'\1.jpg', b, flags=_re.I)
+        b=_re.sub(r'-(\d+)\.(jpg|jpeg|png|webp)$', r'\1.jpg', b, flags=_re.I)
+        return b
+    _m={}
+    for u in samples:
+        u = _upgrade_dmm_size(u)
+        k=_key2(u); cur=_m.get(k)
+        if (not cur) or (_score2(u)>_score2(cur)): _m[k]=u
+    samples=list(_m.values())
+    samples = samples[:max_gallery]
+
+    def img(u, cls: str = "", sizes: str | None = None):
+        if not u: return ""
+        cls_attr = f' class="{cls}"' if cls else ""
+        sizes_attr = f' sizes="{sizes}"' if sizes else ""
+        return f'<img src="{u}" loading="lazy" decoding="async"{cls_attr}{sizes_attr} alt="{title}">'
+
     parts = []
     if jacket or samples:
         first_img = jacket or samples[0]
@@ -159,7 +163,7 @@ def build_content_html(row, content_builder: ContentBuilder | None = None, max_g
     if meta:
         parts.append("<p>" + "<br>".join(meta) + "</p>")
     if samples:
-        items = "\n".join(f'<figure class="gallery__item">{img(u)}</figure>' for u in samples)
+        items = "\n".join(f'<figure class="gallery__item">{img(u, cls="sample", sizes="100vw")}</figure>' for u in samples)
         parts.append(f'<div class="gallery">{items}</div>')
     if url:
         parts.append(f'<p><a href="{url}" rel="nofollow sponsored" target="_blank">公式ページはこちら</a></p>')
@@ -195,20 +199,82 @@ def _clean_query_keep_webp(u: str) -> str:
         return u
 
 def _upgrade_dmm_size(u: str) -> str:
-    if not u: return u
-    if u.startswith("//"): u = "https:" + u
-    u = re.sub(r"/ps\.jpg(\?.*)?$", "/pl.jpg", u, flags=re.I)
-    u = re.sub(r"([a-z0-9]+)ps\.jpg$", r"\1pl.jpg", u, flags=re.I)
-    if "awsimgsrc.dmm.co.jp" in u:
-        m = re.search(r"/([^/]+)/\1-(\d+)\.(jpg|jpeg|png|webp)", u, flags=re.I)
-        if m:
-            cid = m.group(1)
-            u = re.sub(rf"/{cid}/{cid}-(\d+)\.(?:jpg|jpeg|png|webp)",
-                       rf"/{cid}/{cid}jp-\1.jpg", u, flags=re.I)
-            u = _clean_query_keep_webp(u)
-    if "now_printing" in u.lower() or "nowprinting" in u.lower():
+    """
+    DMM画像URLの“小→大”昇格を一括で行う。
+    - サンプル: js-001 → jp-001（小→大）
+    - awsimgsrc: /cid/cid-001.jpg → /cid/cidjp-001.jpg
+    - 不要クエリ除去（f=webp は温存）
+    - now_printing/noimage 系は空文字に
+    """
+    if not u:
+        return u
+    if u.startswith("//"):
+        u = "https:" + u
+
+    low = u.lower()
+    is_dmm = ("dmm.co.jp" in low) or ("dmm.com" in low)
+    if "now_print" in low or "nowprinting" in low or "noimage" in low or "no_image" in low or "nopic" in low or "noimg" in low:
         return ""
+    if is_dmm:
+        # サンプル 小→大（js → jp）
+        u = re.sub(r'js-(\d+)\.(jpg|jpeg|png|webp)(\?.*)?$', r'jp-\1.jpg', u, flags=re.I)
+
+        # awsimgsrc ドメインの番号系を jp に
+        if "awsimgsrc.dmm.co.jp" in low:
+            m = re.search(r"/([^/]+)/\1-(\d+)\.(jpg|jpeg|png|webp)", u, flags=re.I)
+            if m:
+                cid = m.group(1)
+                u = re.sub(rf"/{cid}/{cid}-(\d+)\.(?:jpg|jpeg|png|webp)",
+                           rf"/{cid}/{cid}jp-\1.jpg", u, flags=re.I)
+            u = _clean_query_keep_webp(u)
+        else:
+            u = _clean_query_keep_webp(u)
     return u
+
+def _head_ok(url: str, timeout: float = 4.0) -> bool:
+    try:
+        r = requests.head(url, allow_redirects=True, timeout=timeout)
+        if r.status_code == 200:
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            return ("image" in ctype)
+        r = requests.get(url, stream=True, timeout=timeout)
+        ok = (r.status_code == 200)
+        try: r.close()
+        except Exception: pass
+        return ok
+    except Exception:
+       return False
+
+def _prefer_bigger_jacket_from_path(img_url: str, cid: str) -> str:
+    """
+    DMM: ディレクトリ内で大きいジャケ候補を優先して存在確認。
+    amateur:  jm -> jp
+    videoa:   pl/pt/pf/ps 優先, 次いで jp, 最後に jm
+    """
+    if not img_url or not cid:
+        return img_url
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        sp = urlsplit(img_url)
+        base_dir = sp.path.rsplit("/", 1)[0]
+        path_l = sp.path.lower()
+        is_amateur = ("/digital/amateur/" in path_l)
+        is_videoa  = ("/digital/video/" in path_l) or ("/digital/videoc/" in path_l)
+
+        if is_amateur:
+            cand_files = [f"{cid}jp.jpg", f"{cid}pl.jpg", f"{cid}pf.jpg", f"{cid}ps.jpg", f"{cid}jm.jpg"]
+        elif is_videoa:
+            cand_files = [f"{cid}pl.jpg", f"{cid}pt.jpg", f"{cid}pf.jpg", f"{cid}ps.jpg", f"{cid}jp.jpg", f"{cid}jm.jpg"]
+        else:
+            cand_files = [f"{cid}pl.jpg", f"{cid}pt.jpg", f"{cid}pf.jpg", f"{cid}ps.jpg", f"{cid}jp.jpg", f"{cid}jm.jpg"]
+
+        for fn in cand_files:
+            url  = urlunsplit((sp.scheme, sp.netloc, f"{base_dir}/{fn}", "", ""))
+            if _head_ok(url):
+                return url
+        return img_url
+    except Exception:
+        return img_url
 
 def _is_large_hint(u: str) -> bool:
     s = u.lower()
@@ -217,20 +283,17 @@ def _is_large_hint(u: str) -> bool:
 def _is_now_printing_url_like(u: str) -> bool:
     if not u: return True
     s = u.lower()
-    return ("now_printing" in s) or ("nowprinting" in s)
+    return ("now_printing" in s) or ("nowprinting" in s) or ("noimage" in s) or ("no_image" in s) or ("nopic" in s) or ("noimg" in s)
 
 def _fast_placeholder_heuristic(u: str) -> bool:
-    """URLだけで高速に判定（now_printing系）"""
+    """URLだけで高速に判定（placeholder系）"""
     if not u:
         return True
     s = u.lower()
-    return ("now_print" in s) or ("nowprinting" in s)
+    return ("now_print" in s) or ("nowprinting" in s) or ("noimage" in s) or ("no_image" in s) or ("nopic" in s) or ("noimg" in s)
 
 def _probe_is_placeholder(u: str, timeout: float = 8.0, verify: bool = True, use_network: bool = True) -> bool:
-    """プレースホルダ判定
-       1) URLヒューリスティック
-       2) use_network=True のときだけ HEAD で軽確認（失敗=Falseにする）
-    """
+    """プレースホルダ判定: ヒューリスティック → 任意でHEAD確認"""
     if _fast_placeholder_heuristic(u):
         return True
     if (not use_network) or (not u):
@@ -238,13 +301,12 @@ def _probe_is_placeholder(u: str, timeout: float = 8.0, verify: bool = True, use
     try:
         r = requests.head(u, allow_redirects=True, timeout=timeout, verify=verify)
         final = (r.url or "").lower()
-        if "now_print" in final or "nowprinting" in final:
+        if "now_print" in final or "nowprinting" in final or "noimage" in final or "no_image" in final:
             return True
         cl = r.headers.get("Content-Length")
         if cl and cl.isdigit() and int(cl) < 15000:
             return True
     except Exception:
-        # ネットワーク失敗を「プレースホルダ扱い」にしない
         return False
     return False
 
@@ -256,7 +318,14 @@ def _pick_best_feature(sample_urls: list[str]) -> str:
     return sorted(sample_urls, key=lambda x: (-score(x), x))[0]
 
 def _extract_sample_images(it):
-    urls = []
+    """
+    サンプル画像URL群を抽出して正規化する。
+    - 小→大に昇格（js→jp、クエリ除去、aws番号→jp-番号）
+    - 同番号（-001 / js-001 / jp-001）で混在する場合は“大だけ残す”
+    - jp/pl ヒントを優先した順に並べる
+    """
+    urls: list[str] = []
+
     def _collect(obj):
         if obj is None: return
         if isinstance(obj, str):
@@ -276,16 +345,37 @@ def _extract_sample_images(it):
         if isinstance(obj, list):
             for v in obj: _collect(v)
             return
+
     for key in ("sampleImageURL","sampleImageURLS","sampleImage","sampleimage","iteminfo"):
         if key in it: _collect(it[key])
 
     seen, uniq = set(), []
     for u in urls:
-        if u not in seen:
+        if u and (u not in seen):
             seen.add(u)
             uniq.append(u)
-    uniq.sort(key=lambda x: (not _is_large_hint(x), x))
-    return uniq
+
+    def _score(u: str) -> int:
+        s = u.lower()
+        return (2 if s.endswith("pl.jpg") else 0) + (1 if "jp-" in s else 0)
+
+    def _key(u: str) -> str:
+        b = u.rsplit("/",1)[-1]
+        b = re.sub(r'js-(\d+)\.(jpg|jpeg|png|webp)$', r'\1.jpg', b, flags=re.I)
+        b = re.sub(r'jp-(\d+)\.(jpg|jpeg|png|webp)$', r'\1.jpg', b, flags=re.I)
+        b = re.sub(r'-(\d+)\.(jpg|jpeg|png|webp)$', r'\1.jpg', b, flags=re.I)
+        return b
+
+    by_key: dict[str, str] = {}
+    for u in uniq:
+        k = _key(u)
+        cur = by_key.get(k)
+        if (not cur) or (_score(u) > _score(cur)):
+            by_key[k] = u
+
+    out = list(by_key.values())
+    out.sort(key=lambda x: (not _is_large_hint(x), x))
+    return out
 
 def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
     cid   = it.get("content_id") or it.get("cid") or ""
@@ -317,10 +407,25 @@ def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
     img = it.get("imageURL")
     if isinstance(img, dict):
         image_large = img.get("large") or img.get("list") or ""
+
+    # URL正規化（クエリ・js→jp・aws番号→jp 変換）
+    image_large = _upgrade_dmm_size(image_large)
     if _is_now_printing_url_like(image_large):
         image_large = ""
 
     sample_images = _extract_sample_images(it)
+
+    # ジャケット昇格（amateur/videoa 両対応で HEAD 存在確認）
+    if image_large and "pics.dmm.co.jp" in image_large and cid:
+        better = _prefer_bigger_jacket_from_path(image_large, (cid or "").lower())
+        if better and better != image_large:
+            image_large = better
+
+    # 依然として小さい/placeholderなら jp サンプルへフォールバック
+    first_sample = sample_images[0] if sample_images else ""
+    if (not image_large or _is_now_printing_url_like(image_large) or image_large.lower().endswith("jm.jpg")) \
+       and first_sample and "jp-" in first_sample.lower():
+        image_large = first_sample
 
     row = {
         "cid": cid,
@@ -345,7 +450,6 @@ def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
         )
         row["trailer_embed"] = auto_src
 
-    
     # .env のサイズを反映
     row["player_width"]  = config.FANZA_IFRAME_W
     row["player_height"] = config.FANZA_IFRAME_H
@@ -359,11 +463,16 @@ def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
             row["trailer_embed"]
         )
 
-    if not row.get("trailer_poster"):
-        first_sample = (row.get("sample_images") or "").split("|")[0] if row.get("sample_images") else ""
-        row["trailer_poster"] = row.get("image_large") or first_sample or None
+    # poster：jmっぽい/欠落なら大きい方へ差し替え（image_large優先→jpサンプル）
+    first_sample_str = (row.get("sample_images") or "").split("|")[0] if row.get("sample_images") else ""
+    poster = (row.get("trailer_poster") or "") or None
+    if (not poster) or (isinstance(poster, str) and poster.lower().endswith("jm.jpg")):
+        row["trailer_poster"] = (row.get("image_large")
+                                 or (first_sample_str if "jp-" in (first_sample_str.lower() if first_sample_str else "") else None))
+    else:
+        row["trailer_poster"] = poster
 
-    # ★ ここで aff_url を作って注入（ENVは config.make_aff_url が中で読む）
+    # アフィURL注入
     base = row.get("affiliateURL") or row.get("URL") or ""
     row["aff_url"] = make_aff_url(base)
 
@@ -375,17 +484,12 @@ def sanitize_trailer_fields(item: dict) -> dict:
         u = (url or "").lower()
         return u.endswith(".mp4") or u.endswith(".m3u8") or (".mp4?" in u) or (".m3u8?" in u)
 
-    # 直リンクは無効化
     if is_direct(item.get("trailer_url", "")):
         item["trailer_url"] = None
 
-    # もし既に iframe 用の src が取れているならそれを採用
     if item.get("trailer_embed"):
         return item
 
-    # ここで “公式の埋め込みURL” をセットする。
-    # 例: アフィ管理画面/APIで得られる iframe src を item["trailer_embed"] に入れる。
-    # 取得方法はあなたの環境に合わせて。
-    # item["trailer_embed"] = build_fanza_embed_src(item)  # TODO: 実装
-
+    # 必要ならここで公式iframeのsrcを組み立てる
+    # item["trailer_embed"] = build_fanza_embed_src(item)  # TODO
     return item

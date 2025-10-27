@@ -9,16 +9,71 @@ from app.core.filters import apply_filters
 from app.util.logger import log_json
 from importlib import import_module
 from app.core.content_builder import ContentBuilder
-import os
+import os as _os
 from app.core.seo import build_seo_fields, build_wp_seo_meta
 from app.core.csv_dedupe import load_skip_cids, append_ledger, load_skip_cids_in_dir
+from app.core.image_mirror import mirror_item_images
+from pathlib import Path
+import traceback
+
+from urllib.parse import urlparse
+import os, mimetypes, requests, io
+
+TAG_STOPWORDS = set(["ハイビジョン", "サンプル", "動画", "独占配信"])
+
+_ZW_RE = re.compile(r"[\u200B\u200C\u200D\uFEFF]")  # ゼロ幅類
+
+def _norm(s: str | None) -> str:
+    if not s:
+        return ""
+    s = _ZW_RE.sub("", s)           # ゼロ幅除去
+    s = s.replace("\u3000", " ")    # 全角スペース→半角
+    return s.strip()
+
+# 追加: 正規化済み stopwords
+TAG_STOPWORDS_N = {_norm(x) for x in TAG_STOPWORDS}
+
+def _is_stopword_term(term: str) -> bool:
+    """完全一致 or 部分一致でノイズ語を弾く"""
+    t = _norm(term)
+    if not t:
+        return True
+    if t in TAG_STOPWORDS_N:
+        return True
+    # '独占配信中', 'ハイビジョン対応' などの派生も除外
+    return any(sw in t for sw in TAG_STOPWORDS_N)
+
+# ---- 追加: args からテンプレパスを確実に拾うユーティリティ
+def _get_content_template_path(args) -> str | None:
+    # argparse で --content-template を定義している想定
+    # 名前が content_template / content_template_path どちらでも拾う
+    return getattr(args, "content_template", None) or getattr(args, "content_template_path", None)
+
+
+def get_wp_client_from_env():
+    """
+    環境変数から WP クライアントを作る:
+      WP_BASE_URL, WP_USER, WP_APP_PASS を想定
+    """
+    base = _os.getenv('WP_URL')
+    user = _os.getenv('WP_USER')
+    ap   = _os.getenv('WP_APP_PASS')
+    if not all([base,user,ap]):
+        raise RuntimeError('WP creds missing: set WP_URL, WP_USER, WP_APP_PASS')
+    return WPClient(base, user, ap)
 
 # --- 女優・ジャンル等を分割する小関数とタグのストップワード ---
 def _split_terms(s: str | None) -> list[str]:
-    """空白/カンマ/読点/中黒/スラッシュで分割してトリム。None→[]。"""
-    return [x.strip() for x in re.split(r"[、,\s/・/]+", (s or "")) if x.strip()]
-
-TAG_STOPWORDS = set(["ハイビジョン", "サンプル", "動画", "独占配信"])
+    """
+    空白/カンマ/読点/中黒/スラッシュ/パイプ(半角/全角) で分割して正規化。
+    """
+    parts = re.split(r"[、,\s/・\|｜]+", (s or ""))  # ← 全角｜(U+FF5C) を追加
+    out = []
+    for x in parts:
+        n = _norm(x)
+        if n:
+            out.append(n)
+    return out
 
 def _is_newer_than(date_str: str, ymd: str | None) -> bool:
     from datetime import datetime
@@ -129,6 +184,114 @@ def _init_content_builder(args) -> ContentBuilder | None:
         hook=hook_fn,
     )
 
+# 置き換え: _search_media_by_filename を拡張
+def _search_media_by_filename(wp, filename, per_page=5):
+    try:
+        return wp.search_media_by_filename(filename, per_page=per_page)
+    except AttributeError:
+        base = os.getenv("WP_URL", "").rstrip("/")
+        user = os.getenv("WP_USER", "")
+        app  = os.getenv("WP_APP_PASS", "")
+        if not (base and user and app):
+            return []
+
+        # 1) slug（拡張子無し）で完全一致狙い
+        name_noext = os.path.splitext(filename)[0]
+        try:
+            url = f"{base}/wp-json/wp/v2/media"
+            r = requests.get(url, params={"slug": name_noext, "per_page": 1},
+                             auth=(user, app), timeout=15)
+            r.raise_for_status()
+            d = r.json() or []
+            if d:  # 見つかればそれを返す
+                return d
+        except Exception:
+            pass
+
+        # 2) それでも無ければ通常の search で候補を返す
+        try:
+            url = f"{base}/wp-json/wp/v2/media"
+            r = requests.get(url, params={"search": filename, "per_page": per_page},
+                             auth=(user, app), timeout=20)
+            r.raise_for_status()
+            return r.json() or []
+        except Exception:
+            return []
+
+
+def _ensure_featured_media_mirrored(wp, url: str) -> int | None:
+    parsed = urlparse(url)
+    fname  = os.path.basename(parsed.path)
+
+    hits = _search_media_by_filename(wp, fname, per_page=15) or []
+    if not hits:
+        return None
+
+    # 1) source_url 完全一致
+    for m in hits:
+        su = str(m.get("source_url") or "")
+        if su.rstrip("/").lower() == url.rstrip("/").lower():
+            return m.get("id")
+
+    # 2) basename の厳密一致（末尾一致ではなく“同名”のみ）
+    for m in hits:
+        su = str(m.get("source_url") or "")
+        if os.path.basename(urlparse(su).path).lower() == fname.lower():
+            return m.get("id")
+
+    # 3) どれにも一致しないなら “見つからず” 扱い（誤命中を防ぐ）
+    return None
+
+
+def _ensure_featured_media_external(wp, url: str, row: dict) -> int | None:
+    """
+    外部URLをダウンロードして /media へアップロード（MIME/拡張子を尊重）。
+    既に同名があれば流用。
+    """
+    parsed = urlparse(url)
+    base_name = os.path.basename(parsed.path) or f"{row.get('cid','post')}"
+    name_noext, ext = os.path.splitext(base_name)
+    if not ext:
+        ext = ".jpg"  # 仮の既定
+
+    # 同名が既にあれば流用
+    fname_try = f"{row.get('cid','post')}{ext.lower()}"
+    hits = _search_media_by_filename(wp, fname_try, per_page=1) or []
+    if hits:
+        return hits[0]["id"]
+
+    # ダウンロード
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    data = resp.content
+
+    # MIME 推定（レスポンス優先→拡張子）
+    mime = resp.headers.get("Content-Type", "").split(";")[0].strip() or None
+    if not mime:
+        mime, _ = mimetypes.guess_type(base_name)
+    if not mime:
+        mime = "image/jpeg"
+
+    # 拡張子を MIME に合わせて調整
+    ext_map = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+    want_ext = ext_map.get(mime, ext.lower())
+    if not fname_try.lower().endswith(want_ext):
+        fname_try = f"{row.get('cid','post')}{want_ext}"
+
+    # 最終チェック：同名が増えていないか
+    hits = _search_media_by_filename(wp, fname_try, per_page=1) or []
+    if hits:
+        return hits[0]["id"]
+
+    # アップロード
+    try:
+        if hasattr(wp, "upload_media_bytes"):
+            return wp.upload_media_bytes(data, filename=fname_try, mime=mime)
+        # フォールバック：upload_media_from_bytes 的なものが無ければ URL 名を使って通常アップロードAPIを呼ぶ
+        return wp.upload_media_from_bytes(data, filename=fname_try, mime=mime)  # ある場合
+    except AttributeError:
+        # 既存の URL アップローダしか無い場合でも、MIME/拡張子を整えた filename を渡す
+        return wp.upload_media_from_url(url, fname_try)
 
 def run_pipeline(args) -> Dict[str, Any]:
     # ====== クエリパラメータ組み立て ======
@@ -146,10 +309,15 @@ def run_pipeline(args) -> Dict[str, Any]:
     # ====== WP 初期化 ======
     wp, cat_ids, tag_ids, status = _init_wp(args)
 
-    # ====== 本文ビルダー初期化（指定が無ければ None → レガシー生成） ======
+    # ====== 本文ビルダー初期化（指定がなければ None → レガシー生成） ======
     content_builder = _init_content_builder(args)
     max_gallery = getattr(args, "max_gallery", 12)
     no_content = getattr(args, "no_content", False)
+
+    # ★ テンプレパスをここで確定（未指定なら None）。Windows でも正規化。
+    content_template_path = _get_content_template_path(args)
+    if content_template_path:
+        content_template_path = str(Path(content_template_path))
 
     out_rows: List[Dict[str, Any]] = []
     offset, got = 1, 0
@@ -197,16 +365,32 @@ def run_pipeline(args) -> Dict[str, Any]:
             # -- 標準化 → 事前フィルタ・補強 --
             row = normalize_item(it)
 
+            # === 画像ミラー（本文生成の直前に実施：直前で上書きされるのを防ぐ） ===
+            if getattr(args, 'mirror_images', False):
+                try:
+                    wp2 = wp if ('wp' in locals() and wp) else get_wp_client_from_env()
+                except Exception as e:
+                    print(f"[mirror] WP client init skipped: {e}")
+                    wp2 = None
+                if wp2:
+                    cid_for_name = (row.get('cid') or row.get('external_id') or f"post{int(time.time())}").lower()
+                    try:
+                        row = mirror_item_images(row, wp2, cid_for_name)
+                        # 置換できたかをログで確認（先頭だけ）
+                        print(f"[mirror] sample_images[:1] = { (row.get('sample_images') or '').split('|')[:1] }")
+                        print(f"[mirror] image_large = { row.get('image_large') }")
+                    except Exception as e:
+                        print(f"[mirror] skip {cid_for_name}: {e}")
+
+            # --- プレイヤーサイズ注入 & iframeサイズ補正 ---
             W, H, ratio = get_player_size_from_env()
             row["player_width"] = W
             row["player_height"] = H
             row["aspect_ratio"] = ratio  # 例: 56.25
-            
-            # 既存の iframe 埋め込みURL（例: item["trailer_embed"]）の size= を.envに合わせて置換
             if row.get("trailer_embed"):
-                row["trailer_embed"] = row["trailer_embed"].replace("size=1280_720", f"size={W}_{H}")
+               row["trailer_embed"] = row["trailer_embed"].replace("size=1280_720", f"size={W}_{H}")
 
-            # NEW: CSVベースの重複スキップ（cid が既にCSVに存在していたら処理しない）
+            # --- CSVベース重複スキップ（記事単位） ---
             cid = (row.get("cid") or "").strip()
             if cid and cid in skip_cids:
                 continue
@@ -215,6 +399,11 @@ def run_pipeline(args) -> Dict[str, Any]:
             row = _filter_and_enhance(row, args)
             if not row:
                 continue
+            
+            # --- 表示用フィールド（テンプレで使う） ---
+            row["genres_clean"]  = ",".join([g for g in _split_terms(row.get("genres")) if not _is_stopword_term(g)])
+            row["maker_clean"]   = _norm(row.get("maker"))
+            row["actress_clean"] = ",".join(_split_terms(row.get("actress")))
 
             # -- 後段フィルタ（キーワード・除外語など） --
             filtered = apply_filters([row], args)
@@ -222,24 +411,39 @@ def run_pipeline(args) -> Dict[str, Any]:
                 continue
             row = filtered[0]
 
-            # -- 本文生成（必要なら）--
-            if not no_content:
-                # まずはテンプレ駆動（ContentBuilder 経由）
-                try:
-                    row["content"] = build_content_html(
-                        row,
-                        content_builder=content_builder,
-                        max_gallery=max_gallery,
-                    )
-                except Exception:
-                    row["content"] = ""
-                # 空なら必ずフォールバック（黒/無表示を回避）
-                if not row.get("content") or not row["content"].strip():
-                    row["content"] = build_content_html(
-                        row,
-                        content_builder=None,   # ←テンプレ無視で従来HTML
-                        max_gallery=max_gallery,
-                    )
+            # -- 本文生成（テンプレ優先。未指定/欠落時は従来HTML）--
+            if content_template_path:
+                p = Path(content_template_path)
+                if not p.exists():
+                    log_json("error", where="content_build",
+                             error=f"template_not_found: {p}", cid=row.get("cid"))
+                    # テンプレが物理的に無い時だけ従来HTMLへ落とす
+                    row["content"] = "<!-- tpl:missing -->" + \
+                                     build_content_html(row, content_builder=None, max_gallery=max_gallery)
+                else:
+                    # ① post.html.j2 を直接描画
+                    try:
+                        # ContentBuilderはrender_fileを持たない実装なので、
+                        # build_content_htmlにContentBuilder(template_path=...)を渡して描画する
+                        cb = ContentBuilder(template_path=str(p))
+                        html = build_content_html(row, content_builder=cb, max_gallery=max_gallery)
+                        row["content"] = "<!-- tpl:post -->" + html
+                    except Exception as e1:
+                        # ここで落ちたら“原因を隠さない”ために安易に content.html.j2 へは落とさない
+                        log_json("error", where="content_build",
+                                 error=f"post_tpl_render_failed: {e1}", cid=row.get("cid"))
+                        # 最低限の保険だけ（従来HTML）。コメントで判別できるようにする
+                        try:
+                            fallback = build_content_html(row, content_builder=None, max_gallery=max_gallery)
+                            row["content"] = "<!-- tpl:content(fallback) -->" + fallback
+                        except Exception as e2:
+                            log_json("error", where="content_build",
+                                     error=f"legacy_build_failed: {e2}", cid=row.get("cid"))
+                            row["content"] = ""
+            else:
+                # テンプレ未指定：従来HTML
+                row["content"] = "<!-- tpl:content(default) -->" + \
+                                 build_content_html(row, content_builder=None, max_gallery=max_gallery)
 
             # -- CSV運用（WPなし）の“新規”定義：skip_cids に無い → 新規として採用
             #    out_rows に入れたら new_count を加算
@@ -271,39 +475,61 @@ def run_pipeline(args) -> Dict[str, Any]:
                     continue
                 
                 # --- SEOメタ生成 ---
-                seo = build_seo_fields(row, site_name=os.getenv("SITE_NAME"))
+                seo = build_seo_fields(row, site_name=_os.getenv("SITE_NAME") or "")
                 meta_extra = {"provider": "FANZA", **build_wp_seo_meta(seo)}
 
-                # ★ アイキャッチ（ジャケット）を明示設定
-                feat_url = row.get("image_large") or row.get("trailer_poster")
-                feat_id = None
-                if feat_url:
+                # ★ アイキャッチ（ジャケット）— ID最優先で確実に
+                feat_id = row.get("image_large_id") or row.get("trailer_poster_id")
+                if not feat_id:
+                    def _pick_feat_url(r):
+                        # image_large → trailer_poster → samples[0]
+                        return r.get("image_large") or r.get("trailer_poster") \
+                               or ( (r.get("sample_images") or "").split("|")[0] if (r.get("sample_images")) else None )
+                    feat_url = _pick_feat_url(row)
+                    if feat_url:
+                        try:
+                            if getattr(args, "mirror_images", False):
+                                # ミラー運用：uploads 内から ID を逆引き（再アップしない）
+                                feat_id = _ensure_featured_media_mirrored(wp, feat_url)
+                            else:
+                                # 非ミラー運用：外部から取得してアップロード
+                                feat_id = _ensure_featured_media_external(wp, feat_url, row)
+                        except Exception as e:
+                            log_json("warn", where="featured_media", error=str(e), url=feat_url, cid=row.get("cid"))
+                if feat_id and hasattr(wp, "_req"):
+                    # ここを NameError 無しに修正（det/meta未定義の旧ログを全撤去）
                     try:
-                        # 同一CIDで毎回同じ名前にしておくとライブラリで識別しやすい
-                        fname = f'{row.get("cid","post")}.jpg'
-                        feat_id = wp.upload_media_from_url(feat_url, fname)
+                        feat_id = int(feat_id)
+                        meta = wp._req("GET", f"/wp-json/wp/v2/media/{feat_id}") or {}
+                        details = meta.get("media_details") or {}
+                        w = details.get("width"); h = details.get("height")
+                        src = meta.get("source_url")
                     except Exception as e:
-                        log_json("warn", where="upload_media", error=str(e), url=feat_url, cid=row.get("cid"))
+                        print(f"[dbg] featured_media meta err: {e}")
 
                 # --- 作品ごとのカテゴリ（女優）とタグを算出 ---
-                actresses = _split_terms(row.get("actress"))
+                actresses = [_norm(x) for x in _split_terms(row.get("actress"))]
                 if actresses:
                     # カテゴリは“女優名のカテゴリ”を1つだけ付ける（ナビ崩れ防止）
                     cat_ids_for_post = wp.ensure_categories([actresses[0]])
                 else:
                     cat_ids_for_post = cat_ids or []
 
-                base_tag_names = [s.strip() for s in (args.wp_tags or "").split(",") if s.strip()]
+                base_tag_names = []
+                for s in (args.wp_tags or "").split(","):
+                    n = _norm(s)
+                    if n and not _is_stopword_term(n):
+                        base_tag_names.append(n)
 
                 dyn_tag_names = []
                 # 女優はタグとしても付与（テーマ側の横断検索に有利）
                 dyn_tag_names += actresses
                 # ジャンル（複数）からノイズ語を除外
-                dyn_tag_names += [g for g in _split_terms(row.get("genres")) if g not in TAG_STOPWORDS]
+                dyn_tag_names += [g for g in _split_terms(row.get("genres")) if not _is_stopword_term(g)]
                 # 単一値系
                 for key in ("maker", "label", "series"):
-                    v = (row.get(key) or "").strip()
-                    if v:
+                    v = _norm(row.get(key))
+                    if v and not _is_stopword_term(v):
                         dyn_tag_names.append(v)
 
                 # 重複除去＋上限

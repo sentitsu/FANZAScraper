@@ -306,6 +306,7 @@ class App(tk.Tk):
         self.var_wp_cats = tk.StringVar(value=os.getenv("WP_CATEGORIES", ""))
         self.var_wp_tags = tk.StringVar(value=os.getenv("WP_TAGS", ""))
         self.var_publish = tk.BooleanVar(value=False)
+        self.var_mirror  = tk.BooleanVar(value=False)  # ★ 画像ミラー（WPメディアへアップロード）
         self.var_future = tk.StringVar()
 
         wpf = ttk.LabelFrame(tab_wp, text="WordPress 投稿設定")
@@ -314,6 +315,10 @@ class App(tk.Tk):
         add_labeled_entry(wpf, "WP_URL", self.var_wp_url)
         add_labeled_entry(wpf, "WP_USER", self.var_wp_user)
         add_labeled_entry(wpf, "WP_APP_PASS", self.var_wp_app, show="*")
+        # ★ 画像をWPメディアへミラーして本文URLをローカル化
+        ttk.Checkbutton(
+            wpf, text="画像をWPにミラーして本文URLをローカル化 (--mirror-images)", variable=self.var_mirror
+        ).pack(fill=tk.X, padx=8, pady=4)
         add_labeled_entry(wpf, "WP_CATEGORIES", self.var_wp_cats, placeholder="カンマ区切り")
         add_labeled_entry(wpf, "WP_TAGS", self.var_wp_tags, placeholder="カンマ区切り")
         ttk.Checkbutton(wpf, text="即時公開 (--publish)", variable=self.var_publish).pack(fill=tk.X, padx=8, pady=4)
@@ -466,13 +471,18 @@ class App(tk.Tk):
             if self.var_wp_tags.get().strip():
                 cmd += ["--wp-tags", self.var_wp_tags.get().strip()]
 
+        # ★ 画像ミラー（WP投稿の有無に関わらず有効にできる）
+        if self.var_mirror.get(): cmd.append("--mirror-images")
+
         return cmd
 
     def _on_run(self):
-        # 検証: WP投稿を選んだのに認証未入力
-        if self.var_wp_post.get():
+        # 検証: WP投稿 or 画像ミラー時は認証が必須
+        if self.var_wp_post.get() or self.var_mirror.get():
             if not (self.var_wp_url.get().strip() and self.var_wp_user.get().strip() and self.var_wp_app.get().strip()):
-                messagebox.showerror("設定不足", "WP投稿を行うには WP_URL / WP_USER / WP_APP_PASS が必要です。")
+                messagebox.showerror(
+                    "設定不足", "WP_URL / WP_USER / WP_APP_PASS を入力してください（WP投稿 または 画像ミラーを有効にしています）。"
+                )
                 return
 
         # 出力ディレクトリ

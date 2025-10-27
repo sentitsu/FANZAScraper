@@ -1,123 +1,231 @@
-{# ============================================
+{# =========================================================
    改良版 Post テンプレート (Jinja2) — javmix-av.com
-   目的: 収益/UX/SEO(A11y/構造化データ)を総合強化
-   方針: has_offer=False（= 商品系は出さない）。構造化データは VideoObject のみ。
-   想定: WordPress + FANZAScraper 生成HTMLとして本文に挿入
-   注意: HLS再生(hls.js)はテーマ/共通JSで1度だけ読み込み推奨
-   ============================================ #}
+   目的:
+     - 違法視聴の注意喚起（信頼性/ブランド保護）
+     - 画像下キャプションでテキスト増量＆回遊導線強化
+     - 主要箇所に“公式ページへ”リンクを複数配置（視認性UP）
+     - A11y/構造化データ(VideoObjectのみ)/パフォーマンスを配慮
+   方針:
+     - has_offer=False（商品ボックスは出さない）
+     - 動画は原則公式iframe。直リンク(mp4/m3u8)は最後の手段
+   ========================================================= #}
 
-<article class="entry">
-  {# ---------- 事前整形 ---------- #}
-  {% set samples = item.sample_images.split("|") if item.sample_images else [] %}
-  {% set poster  = item.trailer_poster or item.image_large or (samples[0] if samples else None) %}
-  {% set _date   = (item.date.split(" ")[0] if item.date and (" " in item.date) else item.date) %}
-  {% set tu      = item.trailer_url or '' %}
-  {% set tu_l    = tu|lower|replace('\n','') %}
-  {% set is_mp4  = (tu_l.endswith('.mp4') or ('.mp4?'  in tu_l)) %}
-  {% set is_m3u8 = (tu_l.endswith('.m3u8') or ('.m3u8?' in tu_l)) %}
-  {% set _max    = item._max_gallery|default(12) %}
-  {# iframeサイズ（.env→CSVから入っている想定） #}
-  {% set W = item.player_width  or 1280 %}
-  {% set H = item.player_height or 720 %}
-  {% set aff_url = item.aff_url %}
+{# ============================== 事前整形 ============================== #}
+{% set samples = item.sample_images.split("|") if item.sample_images else [] %}
+{% set poster  = item.trailer_poster or item.image_large or (samples[0] if samples else None) %}
+{% set _date   = (item.date.split(" ")[0] if item.date and (" " in item.date) else item.date) %}
+{% set tu      = item.trailer_url or '' %}
+{% set tu_l    = tu|lower|replace('\n','') %}
+{% set is_mp4  = (tu_l.endswith('.mp4') or ('.mp4?'  in tu_l)) %}
+{% set is_m3u8 = (tu_l.endswith('.m3u8') or ('.m3u8?' in tu_l)) %}
+{% set _max    = item._max_gallery|default(12) %}
+{% set W = item.player_width  or 1280 %}
+{% set H = item.player_height or 720 %}
+{% set aff_url = item.aff_url or item.URL %}
+{% set title = item.title or '' %}
+{% set safe_title = title|replace('"','') %}
 
-  {# ---------- 見出し ---------- #}
-  {% if item.title %}
-    <header class="entry__header">
-      <h1 class="entry__title">{% if item.cid %}[{{ item.cid }}] {% endif %}{{ item.title }}</h1>
-    </header>
-  {% endif %}
+{# ルート相対の内部リンク基底 #}
+{% set TAG_BASE = '/tag/' %}
+{% set CAT_BASE = '/category/' %}
 
-  {# ---------- メタ情報 ---------- #}
-  <section class="entry__meta" aria-label="作品情報">
-    <dl class="meta">
-      {% if item.maker %}<div class="meta__row"><dt>メーカー</dt><dd>{{ item.maker }}</dd></div>{% endif %}
-      {% if item.actress %}<div class="meta__row"><dt>出演</dt><dd>{{ item.actress }}</dd></div>{% endif %}
-      {% if _date %}<div class="meta__row"><dt>発売日</dt><dd><time datetime="{{ _date }}">{{ _date }}</time></dd></div>{% endif %}
-      {% if item.cid %}<div class="meta__row"><dt>品番</dt><dd><code>{{ item.cid }}</code></dd></div>{% endif %}
-      {% if item.genres %}<div class="meta__row"><dt>ジャンル</dt><dd>{{ item.genres }}</dd></div>{% endif %}
-    </dl>
-  </section>
+{# ============================== URL 正規化マクロ ============================== #}
+{% macro fix(u) -%}
+  {%- if u and u.startswith('//') -%}https:{{ u }}
+  {%- else -%}{{ u }}{%- endif -%}
+{%- endmacro %}
 
-  {# ---------- リード動画 / 画像 ---------- #}
+{# ============================== タグ、ジャンル 正規化マクロ ============================== #}
+{% set ZWSP = '​' %}  {# U+200B ZERO WIDTH SPACE #}
+{% set ZWNJ = '‌' %}  {# U+200C #}
+{% set ZWJ  = '‍' %}  {# U+200D #}
+{% set BOM  = '﻿' %}  {# U+FEFF #}
+
+{% macro norm(term) -%}
+  {{ (term or '')
+      | replace('　',' ')
+      | replace(ZWSP,'')
+      | replace(ZWNJ,'')
+      | replace(ZWJ,'')
+      | replace(BOM,'')
+      | trim
+      | urlencode
+  }}
+{%- endmacro %}
+
+<article class="entry" data-tpl="v2">
+
+  {# ============================== リード動画 / 画像 ============================== #}
+
   {% if item.trailer_embed %}
-    {# A案：DMMのUI込みで確実にズレない 4:3 ボックス #}
+    {# iframe の title（作品名 + 固定ラベル） #}
+    {% set iframe_title = (item.title or item.name or '動画') ~ ' – 公式プレイヤー' %}
+
     <div class="fanza-embed fanza-embed--ui" style="--w:{{W}}; --h:{{H}};">
       <iframe
         src="{{ item.trailer_embed }}"
+        title="{{ iframe_title|e }}"
         width="{{ W }}" height="{{ H }}"
-        loading="lazy" allowfullscreen scrolling="no" frameborder="0">
-      </iframe>
+        loading="lazy" allowfullscreen
+        scrolling="no" frameborder="0"></iframe>
     </div>
-
   {% elif is_mp4 %}
     <figure class="lead-media">
       <video class="lead-media__video" controls preload="none" playsinline {% if poster %}poster="{{ poster }}"{% endif %}>
         <source src="{{ item.trailer_url }}" type="video/mp4">
       </video>
-      {% if item.title %}<figcaption class="lead-media__cap">{{ item.title }} — 予告編</figcaption>{% endif %}
+      {% if title %}<figcaption class="lead-media__cap">{{ title }} — 予告編</figcaption>{% endif %}
     </figure>
-
   {% elif is_m3u8 %}
     <figure class="lead-media">
       <video class="lead-media__video hls-player" controls preload="none" playsinline data-src="{{ item.trailer_url }}" {% if poster %}poster="{{ poster }}"{% endif %}></video>
-      {% if item.title %}<figcaption class="lead-media__cap">{{ item.title }} — 予告編</figcaption>{% endif %}
+      {% if title %}<figcaption class="lead-media__cap">{{ title }} — 予告編</figcaption>{% endif %}
     </figure>
-
   {% elif poster %}
     <figure class="lead-media">
-      <a class="video-fallback" href="{{ item.URL }}" target="_blank" rel="sponsored noopener" aria-label="公式ページで動画を見る">
-        <img src="{{ poster }}" alt="{{ item.title or '' }}" loading="lazy" decoding="async">
-        <span class="playbtn" aria-hidden="true">▶</span>
+      <a class="video-fallback" href="{{ aff_url }}" target="_blank" rel="sponsored noopener" aria-label="公式ページで動画を見る">
+        <img class="skip-lazy" src="{{ fix(poster) }}" alt="{{ title }}" decoding="async" loading="eager" width="1280" height="720" fetchpriority="high">
       </a>
+      {% if title %}<figcaption class="lead-media__cap"><a href="{{ aff_url }}" target="_blank" rel="sponsored noopener">公式ページで {{ title }} を見る</a></figcaption>{% endif %}
     </figure>
   {% endif %}
+  
+  {# ============================== preconnect（画像CDN） ============================== #}
+  <script>
+  (function(){
+    var need = /pics\\.dmm\\.co\\.jp|p\\.dmm\\.co\\.jp/.test(document.documentElement.innerHTML);
+    if(!need) return;
+    var d1 = document.createElement('link');
+    d1.rel='preconnect'; d1.href='https://pics.dmm.co.jp'; d1.crossOrigin='';
+    document.head.appendChild(d1);
+    var d2 = document.createElement('link');
+    d2.rel='preconnect'; d2.href='https://p.dmm.co.jp'; d2.crossOrigin='';
+    document.head.appendChild(d2);
+  })();
+  </script>
 
-  {# ---------- CTA（1個だけ） ---------- #}
+
+  {# ============================== 1st CTA ============================== #}
   {% if aff_url %}
     <p class="cta">
       <a class="cta__btn" href="{{ aff_url }}" target="_blank" rel="sponsored noopener">
-        <span>作品ページを見る</span>
+        <span><em>{{ title }}</em> のフル動画はこちら</span>
       </a>
     </p>
   {% endif %}
 
-  {# ---------- ギャラリー ---------- #}
+  
+
+  {# ============================== タイトル ============================== #}
+  {% if title %}
+    <header class="entry__header">
+      <h2 class="entry__title">{% if item.cid %}[{{ item.cid }}] {% endif %}{{ title }}</h2>
+    </header>
+  {% endif %}
+
+  {# ============================== メタ情報 ============================== #}
+  <section class="entry__meta" aria-label="作品情報">
+    <dl class="meta">
+      {% if item.maker %}
+        <div class="meta__row">
+          <dt>メーカー</dt>
+          <dd>
+            <a href="{{ TAG_BASE }}{{ norm(item.maker_clean) }}/" class="meta__link">{{ item.maker_clean }}</a>
+          </dd>
+        </div>
+      {% endif %}
+      {% if item.actress %}
+        <div class="meta__row">
+          <dt>出演</dt>
+          <dd>
+            {% for name in (item.actress|replace("、",",")|replace("・",",")|replace("/",",")).split(",") if name.strip() %}
+              <a href="{{ CAT_BASE }}{{ norm(name) }}/" class="chip">{{ name|trim }}</a>
+            {% endfor %}
+          </dd>
+        </div>
+      {% endif %}
+      {% if item.label_clean %}
+        <div class="meta__row">
+          <dt>レーベル</dt>
+          <dd>
+            <a href="{{ TAG_BASE }}{{ norm(item.label_clean) }}/" class="meta__link">{{ item.label_clean }}</a>
+          </dd>
+        </div>
+      {% endif %}
+      {% if item.release_date %}
+        <div class="meta__row">
+          <dt>発売日</dt>
+          <dd>{{ item.release_date }}</dd>
+        </div>
+      {% endif %}
+      {% if item.cid %}
+        <div class="meta__row">
+          <dt>品番</dt>
+          <dd><a class="meta__link" href="/cid/{{ norm(item.cid) }}/">{{ item.cid }}</a></dd>
+        </div>
+      {% endif %}
+      {% if item.genres_clean %}
+        <div class="meta__row">
+          <dt>ジャンル</dt>
+          <dd>
+            {% for g in (item.genres_clean or '').split(',') if g.strip() %}
+              <a class="chip" href="{{ TAG_BASE }}{{ norm(g) }}/">{{ g }}</a>
+            {% endfor %}
+          </dd>
+        </div>
+      {% endif %}
+    </dl>
+  </section>
+
+
+  {# ============================== ギャラリー ============================== #}
   {% if samples %}
     <section class="gallery" aria-label="サンプル画像">
-      {% for u in samples[:_max] %}
-        {% if u %}
-          <figure class="gallery__item">
-            <img src="{{ u }}" alt="{{ item.title or '' }} サンプル {{ loop.index }}" loading="lazy" decoding="async">
-          </figure>
-        {% endif %}
+      {% for u in samples[:_max] if u %}
+        <figure class="gallery__item">
+          <a href="{{ aff_url }}" target="_blank" rel="sponsored noopener" class="gallery__link" aria-label="公式ページで {{ title }} を見る (画像 {{ loop.index }})">
+            <img src="{{ fix(u) }}" alt="{{ title }} サンプル {{ loop.index }}" decoding="async" loading="lazy" fetchpriority="low" width="600" height="400">
+          </a>
+          <figcaption class="gallery__cap"><a href="{{ aff_url }}" target="_blank" rel="sponsored noopener">[{{ title }} - 画像{{ loop.index }}]</a></figcaption>
+        </figure>
       {% endfor %}
     </section>
   {% endif %}
 
-  {# ---------- JSON-LD (構造化データ：VideoObject のみ) ---------- #}
-  {% if is_mp4 or is_m3u8 or poster %}
-    {# poster が dict {large,list,small} の場合に URL へ正規化。空なら samples[0] にフォールバック #}
-    {% set thumb = None %}
-    {% if poster %}
-      {% if poster is mapping %}
-        {% set thumb = poster.large or poster.list or poster.small %}
-      {% else %}
-        {% set thumb = poster %}
-      {% endif %}
-    {% endif %}
-    {% if not thumb and samples %}{% set thumb = samples[0] %}{% endif %}
+  {# ============================== 2nd CTA ============================== #}
+  {% if aff_url %}
+    <p class="cta cta--inline">
+      <a class="cta__btn" href="{{ aff_url }}" target="_blank" rel="sponsored noopener">
+        <span><em>{{ title }}</em> のフル動画はこちら</span>
+      </a>
+    </p>
+  {% endif %}
 
-    {% set video = {
-      "@context":"https://schema.org",
-      "@type":"VideoObject",
-      "name": (item.title or "") ~ " 予告編",
-      "description": item.description or item.title or ""
-    } %}
-    {% if thumb %}{% set _ = video.update({"thumbnailUrl": thumb}) %}{% endif %}
+  {# ============================== 注意喚起 ============================== #}
+  <aside class="notice notice--legal" role="note" aria-label="視聴に関する注意">
+    <strong class="notice__hd">公式配信で安全に楽しもう</strong>
+    <p class="notice__tx">
+      海賊版サイトや違法アップロードの視聴は、著作権侵害の助長だけでなく
+      マルウェア感染・個人情報の流出などのリスクがあります。作品は必ず
+      公式配信で視聴してください。
+    </p>
+    <p class="notice__tx">
+      公式サービスなら高画質・安定再生・年齢確認などの安全対策が整っており、
+      クリエイターや出演者に正しく対価が届きます。初めての方は、
+      作品ページの説明や利用規約を確認してからご利用ください。
+    </p>
+    <ul class="notice__list">
+      <li>URLが正規ドメイン（例：<code>dmm.co.jp</code>）かを確認する</li>
+      <li>外部ダウンロードの強要や過剰なポップアップが出るサイトは利用しない</li>
+      <li>本ページのリンクは <em>スポンサー付き</em> です。料金等は公式表記を必ず確認</li>
+    </ul>
+  </aside>
 
-    {# uploadDate は ISO日時を最優先。無ければ日付→00:00:00+09:00 に正規化 #}
-    {% set tz = site_tz or '+09:00' %}  {# 環境に合わせて。日本なら +09:00 #}
+  {# ============================== JSON-LD (VideoObject) ============================== #}
+  {% set has_visual = (item.trailer_embed or is_mp4 or is_m3u8 or poster or (samples|length>0)) %}
+  {% if has_visual %}
+    {% set thumb = poster if poster else (samples[0] if samples else None) %}
+    {% set tz = site_tz or '+09:00' %}
     {% if item.date_iso %}
       {% set upload_iso = item.date_iso %}
     {% elif _date %}
@@ -125,18 +233,15 @@
     {% else %}
       {% set upload_iso = None %}
     {% endif %}
+    {% set video = {"@context":"https://schema.org","@type":"VideoObject","name": (title or "") ~ " 予告編","description": item.description or title or ""} %}
+    {% if thumb %}{% set _ = video.update({"thumbnailUrl": thumb}) %}{% endif %}
     {% if upload_iso %}{% set _ = video.update({"uploadDate": upload_iso}) %}{% endif %}
-
-    {# 実体があれば contentUrl、無ければ embedUrl #}
     {% if item.trailer_url %}
       {% set _ = video.update({"contentUrl": item.trailer_url}) %}
     {% elif item.trailer_embed %}
       {% set _ = video.update({"embedUrl": item.trailer_embed}) %}
     {% endif %}
-
     {% if item.URL %}{% set _ = video.update({"url": item.URL}) %}{% endif %}
-
-    {# duration は 0 秒は出さない #}
     {% if item.trailer_duration and item.trailer_duration|int > 0 %}
       {% set dur = item.trailer_duration|int %}
       {% set h = (dur // 3600)|int %}
@@ -145,29 +250,21 @@
       {% set dur_iso = 'PT' ~ (h ~ 'H' if h) ~ (m ~ 'M' if (h or m)) ~ s ~ 'S' %}
       {% set _ = video.update({"duration": dur_iso}) %}
     {% endif %}
-
     {% if site_name and site_logo_url %}
-      {% set _ = video.update({
-        "publisher": {
-          "@type": "Organization",
-          "name": site_name,
-          "logo": { "@type": "ImageObject", "url": site_logo_url }
-        }
-      }) %}
+      {% set _ = video.update({"publisher": {"@type": "Organization","name": site_name,"logo": {"@type": "ImageObject", "url": site_logo_url }}}) %}
     {% endif %}
     <script type="application/ld+json">{{ video | tojson }}</script>
   {% endif %}
 
 </article>
 
-{# ---------- HLS 初期化(必要時のみ) ---------- #}
+{# ============================== HLS 初期化 ============================== #}
 <script>
 (function(){
   var el = document.querySelector('video.hls-player');
   if(!el) return;
   var src = el.getAttribute('data-src');
   if (!src) return;
-
   if (el.canPlayType('application/vnd.apple.mpegurl')) {
     el.src = src;
   } else if (window.Hls) {
@@ -183,43 +280,93 @@
 })();
 </script>
 
+{# ============================== スタイル ============================== #}
 <style>
-/* ====== Layout ====== */
-.entry{
-  --gap:14px;
-  --radius:12px;
-  --bg:#ffffff;
-  --fg:#000000;
-  --fg-weak:#333333;
-  --brand:#f5d36a;
-}
+/* ====== Theme Vars ====== */
+.entry{ --gap:14px; --radius:12px; --bg:#ffffff; --fg:#000000; --fg-weak:#333333; --brand:#f5d36a; --accent:#0b0b0b; --warn:#fff3cd; --warn-border:#e5ce79; }
+
+/* ====== Base ====== */
 .entry{color:var(--fg)}
 .entry a{color:inherit}
-
 .entry__header{margin:0 0 .6rem}
 .entry__title{font-size:clamp(1.05rem,1.4vw+1rem,1.8rem);line-height:1.35;margin:0 0 .2rem;font-weight:800}
 
-/* meta */
-.meta{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .8rem;margin:0 0 1rem}
-.meta__row{display:contents}
-.meta dt{color:var(--fg-weak);font-weight:600}
-.meta dd{margin:0}
+/* ====== Legal Notice ====== */
+.entry .notice{
+  position:relative;
+  border:2px solid var(--warn-border) !important;
+  background:var(--warn) !important;
+  border-radius:12px;
+  padding:14px 16px 14px 48px;
+  margin:0 0 .9rem;
+  box-shadow:0 2px 0 rgba(0,0,0,.05);
+}
+.entry .notice__hd{display:block;font-weight:900;margin:0 0 .25rem}
+.entry .notice__tx{margin:.35rem 0;line-height:1.85}
+.entry .notice__cta{display:inline-block;font-weight:800;text-decoration:underline}
 
-/* === DMM埋め込み（UI込み4:3） === */
-.fanza-embed{
-  position:relative; width:100%; max-width:calc(var(--w)*1px);
-  margin:0 auto 1rem; overflow:hidden; background:#000;
-  border-radius:var(--radius); line-height:0; clear:both; isolation:isolate;
+/* ====== Meta（表風の囲み） ====== */
+.entry .entry__meta .meta{
+  display:grid !important;
+  grid-template-columns: 8.5em 1fr !important;
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:10px;
+  overflow:hidden;
 }
-.fanza-embed--ui::before{ content:""; display:block; padding-top:75%; } /* ←ここが効く */
-.fanza-embed > iframe{
-  position:absolute; inset:0; width:100% !important; height:100% !important;
-  border:0; display:block !important;
+.entry .entry__meta .meta__row{
+  display:contents !important;     /* dt/dd を直接グリッドの子にする */
 }
-/* Cocoonの共通iframeルールを無効化 */
+.entry .entry__meta .meta__row > dt,
+.entry .entry__meta .meta__row > dd{
+  padding:10px 12px;
+  border-bottom:1px solid #eef0f2;
+  line-height:1.6;
+}
+.entry .entry__meta .meta__row > dt{
+  grid-column:1 !important;
+  background:#f7f7f8;
+  font-weight:700;
+  color:#111;
+  border-right:1px solid #e5e7eb;
+  white-space:nowrap;
+}
+.entry .entry__meta .meta__row > dd{
+  grid-column:2 !important;
+  margin:0 !important;
+  display:flex !important;
+  flex-wrap:wrap !important;
+  gap:8px 10px !important;
+  align-items:center !important;
+  word-break:normal !important;
+}
+/* 最終行の下線を消す */
+.entry .entry__meta .meta__row:last-of-type > dt,
+.entry .entry__meta .meta__row:last-of-type > dd{
+  border-bottom:none !important;
+}
+/* チップ（女優/ジャンル）が横並びになるよう 100%幅を禁止 */
+.entry .entry__meta .meta__row > dd > *{
+  flex:0 0 auto !important;
+  display:inline-flex !important;
+  align-items:center;
+  white-space:nowrap !important;
+  word-break:keep-all !important;
+  writing-mode:horizontal-tb !important;
+}
+/* 見た目（必要なら） */
+.entry .chip,
+.entry .entry__meta .meta__row > dd a{
+  background:#f6f6f6; border:1px solid #ddd; border-radius:999px; padding:.2rem .65rem; text-decoration:none;
+}
+
+/* ====== FANZA iframe ====== */
+.fanza-embed{ position:relative; width:100%; max-width:calc(var(--w)*1px); margin:0 auto 1rem; overflow:hidden; background:#000; border-radius:var(--radius); line-height:0; clear:both; isolation:isolate; }
+.fanza-embed--ui::before{ content:""; display:block; padding-top:75%; }
+.fanza-embed > iframe{ position:absolute; inset:0; width:100% !important; height:100% !important; border:0; display:block !important; }
 .entry-content iframe{ max-width:none !important; }
 
-/* lead media (mp4/HLS フォールバック用) */
+/* ====== Lead Media ====== */
 .lead-media{margin:0 0 .8rem}
 .lead-media__video{width:100%;display:block;background:#000;border-radius:var(--radius);aspect-ratio:16/9}
 .lead-media__cap{font-size:.9rem;color:var(--fg-weak);margin:.3rem 0 0}
@@ -227,50 +374,81 @@
 .video-fallback img{width:100%;height:auto;display:block;aspect-ratio:16/9;object-fit:cover}
 .video-fallback .playbtn{position:absolute;right:6%;bottom:6%;background:rgba(255,255,255,.92);color:#000;border-radius:999px;padding:.55em 1em;font-weight:800}
 
-/* gallery */
-.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:.8rem 0}
-.gallery__item{margin:0}
-.gallery__item img{width:100%;height:100%;aspect-ratio:3/2;object-fit:cover;border-radius:10px}
+/* ====== Gallery ====== */
+.gallery{ display:grid; grid-template-columns: 1fr !important; gap:12px; }
+.gallery__item img{ display:block; width:100%; height:auto; object-fit:contain; aspect-ratio:auto; border-radius:6px; }
+.gallery__link{display:block}
+.gallery__cap{font-size:.9rem; margin:.35rem 0 0}
+.gallery__cap a{ text-decoration:underline; font-weight:700; }
 
-/* CTA */
-.cta{
-  margin:1.2rem 0 0;
-  text-align:initial; /* 中央寄せを解除して幅100%に */
-}
-.cta__btn{
-  display:block;
-  width:100%;
-  box-sizing:border-box;
+/* ====== CTA ====== */
+.cta{ margin:1.1rem 0 0; }
+.cta--inline{ margin:.9rem 0 0; }
+.cta__btn{ display:block; width:100%; box-sizing:border-box; background:var(--brand); color:#000; border-radius:0; border:3px solid var(--accent); padding:1rem 1.25rem; font-weight:900; font-size:clamp(1rem, 0.9rem + 0.6vw, 1.25rem); line-height:1.2; text-decoration:none; text-align:center; letter-spacing:.02em; box-shadow:0 6px 0 rgba(0,0,0,.35); transition:transform .02s, box-shadow .2s, filter .2s; }
+.cta__btn:hover{ filter:brightness(.96); box-shadow:0 3px 0 rgba(0,0,0,.35); transform:translateY(3px); }
+.cta__btn:active{ transform:translateY(6px); box-shadow:0 0 0 rgba(0,0,0,0); }
+.cta__btn:focus-visible{ outline:3px solid #111; outline-offset:3px; }
 
-  /* 見た目：四角く・目立つ */
-  background:var(--brand);
-  color:#000;
-  border-radius:0;                /* ← 角丸をゼロに */
-  border:3px solid #000;          /* 太枠でコントラスト */
-  padding:1rem 1.25rem;
+/* ====== CTA 文字の上下中央揃え ====== */
+.cta__btn{ display:flex; align-items:center; justify-content:center; text-align:center; min-height:3.2rem; line-height:1; padding:.9rem 1.25rem; }
+.cta__btn span{ line-height:1.2 }
 
-  font-weight:900;
-  font-size:clamp(1rem, 0.9rem + 0.6vw, 1.25rem);
-  line-height:1.2;
-  text-decoration:none;
-  text-align:center;
-  letter-spacing:.02em;
+/* ==== Notice（囲みブロック強化） ==== */
+.entry[data-tpl="v2"] .notice{
+  position: relative;
+  border: 2px solid var(--warn-border);
+  background: var(--warn);
+  border-radius: 12px;
+  padding: 14px 16px 14px 48px !important;
+  box-shadow: 0 2px 0 rgba(0,0,0,.05);
+}
 
-  /* 立体感 */
-  box-shadow:0 6px 0 rgba(0,0,0,.35);
-  transition:transform .02s, box-shadow .2s, filter .2s;
+/* 左のアクセントバー */
+.entry .notice::before{
+  content:"";
+  position:absolute;
+  inset: 10px auto 10px 10px;
+  width: 6px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #f0d77a, #e5ce79);
 }
-.cta__btn:hover{
-  filter:brightness(.96);
-  box-shadow:0 3px 0 rgba(0,0,0,.35);
-  transform:translateY(3px);
+
+/* 情報アイコン（SVG） */
+.entry .notice.notice--legal::after{
+  content:"";
+  position:absolute;
+  left: 18px; top: 14px;
+  width: 22px; height: 22px;
+  background:
+    url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'>\
+<circle cx='12' cy='12' r='10' stroke='%230b0b0b' stroke-width='2'/>\
+<rect x='11' y='10' width='2' height='7' fill='%230b0b0b'/>\
+<rect x='11' y='6' width='2' height='2' fill='%230b0b0b'/>\
+</svg>") center/contain no-repeat;
+  opacity: .9;
 }
-.cta__btn:active{
-  transform:translateY(6px);
-  box-shadow:0 0 0 rgba(0,0,0,0);
+
+/* 見出し・本文の余白微調整 */
+.entry[data-tpl="v2"] .notice__hd{ display:block; font-weight:900; margin:0 0 .25rem; }
+.entry[data-tpl="v2"] .notice__tx{ margin:.35rem 0; line-height:1.85; }
+.entry[data-tpl="v2"] .notice__list{ margin:.45rem 0 0 1.2rem; }
+.entry[data-tpl="v2"] .notice__list li{ margin:.2rem 0; }
+
+/* ダーク背景でも読みやすく（任意） */
+@media (prefers-color-scheme: dark){
+  .entry[data-tpl="v2"] .notice{
+    background: color-mix(in lab, var(--warn) 85%, #000);
+    border-color: color-mix(in lab, var(--warn-border) 75%, #000);
+  }
+  .entry[data-tpl="v2"] .notice::before{
+    background: linear-gradient(180deg, #d8bf66, #cbb55f);
+  }
 }
-.cta__btn:focus-visible{
-  outline:3px solid #111;
-  outline-offset:3px;
-}
+
+/* ====== 遅延レイアウト（視界外ブロック） ====== */
+.entry .gallery,
+.entry .entry__meta,
+.entry .notice{ content-visibility:auto; contain-intrinsic-size:800px; }
+
 </style>
