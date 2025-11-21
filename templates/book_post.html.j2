@@ -1,0 +1,557 @@
+{# ========================================================
+   エロ漫画(電子書籍)用 Post テンプレ v2 — javmix-av.com
+   対応フィールド（fanza_book.normalize_item() + pipeline）:
+     - item.cid
+     - item.title
+     - item.URL         … 元作品URL（aff_url 済）
+     - item.aff_url     … make_aff_url 済のアフィURL
+     - item.date
+     - item.maker       … 出版社/サークル
+     - item.label       … レーベル
+     - item.series      … シリーズ名
+     - item.actress     … 著者名（カンマ区切り）
+     - item.genres      … ジャンル（カンマ区切り）
+     - item.genres_clean, item.actress_clean … pipeline で整形済み
+     - item.image_large … 表紙
+     - item.sample_images … サンプル画像URL '|' 連結
+   ======================================================== #}
+
+{# ============================== 事前整形 ============================== #}
+{% set official_url = item.aff_url or item.URL or "" %}
+{% set samples = (item.sample_images or "").split("|") if item.sample_images else [] %}
+{% set cover_url = item.image_large or (samples[0] if samples else "") %}
+
+{% set authors_str = item.actress_clean or item.actress or "" %}
+{% set genres_str  = item.genres_clean  or item.genres  or "" %}
+
+{% set title      = item.title or "" %}
+{% set safe_title = title|replace('"','') %}
+{% set has_visual = cover_url or (samples|length > 0) %}
+
+<article class="entry entry--book" data-tpl="book-v2">
+
+  {# ============================== リード（表紙＋リード文） ============================== #}
+  <header class="entry__header">
+    <h1 class="entry__title">
+      {% if authors_str %}[{{ authors_str }}] {% endif %}{{ title }}
+    </h1>
+    {% if item.cid %}
+      <p class="entry__subtitle">
+        作品ID: <span class="entry__cid">{{ item.cid }}</span>
+      </p>
+    {% endif %}
+  </header>
+
+  <div class="entry__lead">
+    <figure class="lead__image">
+      {% if cover_url %}
+        {% if official_url %}
+          <a href="{{ official_url }}" target="_blank" rel="sponsored noopener" aria-label="公式ストアで {{ title }} を見る">
+            <img
+              src="{{ cover_url }}"
+              alt="{{ title }} の表紙"
+              loading="eager"
+              decoding="async"
+              class="lead__img"
+            >
+          </a>
+        {% else %}
+          <img
+            src="{{ cover_url }}"
+            alt="{{ title }} の表紙"
+            loading="eager"
+            decoding="async"
+            class="lead__img"
+          >
+        {% endif %}
+      {% endif %}
+    </figure>
+
+    <div class="lead__body">
+      <p class="lead__catch">
+        エロ漫画・電子書籍『{{ title }}』の見どころや魅力を、
+        サンプル画像つきでわかりやすく紹介します。<br>
+        違法アップロードではなく、公式配信で安全に楽しみたい人向けの解説です。
+      </p>
+
+      {% if official_url %}
+        <p class="cta cta--lead">
+          <a
+            class="cta__btn"
+            href="{{ official_url }}"
+            target="_blank"
+            rel="sponsored noopener"
+          >
+            <span>公式ストアで『{{ title }}』をチェックする</span>
+          </a>
+        </p>
+        <p class="lead__note">
+          ※FANZA電子書籍の公式ページに移動します。
+        </p>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ============================== メタ情報（表形式） ============================== #}
+  <section class="entry__meta" aria-label="作品情報">
+    <h2 class="meta__title">作品情報</h2>
+    <dl class="meta">
+      <div class="meta__row">
+        <dt>タイトル</dt>
+        <dd>{{ title }}</dd>
+      </div>
+
+      {% if authors_str %}
+      <div class="meta__row">
+        <dt>著者</dt>
+        <dd>{{ authors_str }}</dd>
+      </div>
+      {% endif %}
+
+      {% if item.maker %}
+      <div class="meta__row">
+        <dt>出版社 / サークル</dt>
+        <dd>{{ item.maker }}</dd>
+      </div>
+      {% endif %}
+
+      {% if item.label %}
+      <div class="meta__row">
+        <dt>レーベル</dt>
+        <dd>{{ item.label }}</dd>
+      </div>
+      {% endif %}
+
+      {% if item.series %}
+      <div class="meta__row">
+        <dt>シリーズ</dt>
+        <dd>{{ item.series }}</dd>
+      </div>
+      {% endif %}
+
+      {% if item.date %}
+      <div class="meta__row">
+        <dt>配信開始日</dt>
+        <dd>{{ item.date }}</dd>
+      </div>
+      {% endif %}
+
+      {% if genres_str %}
+      <div class="meta__row">
+        <dt>ジャンル</dt>
+        <dd>
+          {# カンマ区切りをちょっとだけ見やすくする #}
+          {% for g in genres_str.split(",") if g.strip() %}
+            <span class="chip">{{ g.strip() }}</span>
+          {% endfor %}
+        </dd>
+      </div>
+      {% endif %}
+
+      <div class="meta__row">
+        <dt>配信サイト</dt>
+        <dd>FANZA 電子書籍</dd>
+      </div>
+
+      {% if item.cid %}
+      <div class="meta__row">
+        <dt>作品ID</dt>
+        <dd>{{ item.cid }}</dd>
+      </div>
+      {% endif %}
+    </dl>
+  </section>
+
+  {# ============================== 本文ブロック ============================== #}
+  {#
+  <section class="entry__section">
+    <h2>『{{ title }}』のあらすじ・内容</h2>
+    <p>
+      こちらの作品は、FANZAが公式配信しているエロ漫画・電子書籍です。
+      ここではネタバレにならない範囲で、作品の雰囲気や魅力を簡単に紹介します。
+    </p>
+    <p>
+      （※この本文ブロックは自動生成のひな形です。必要に応じて、
+      後から手動で加筆・書き換えを行ってください）
+    </p>
+  </section>
+  #}
+
+  {# ============================== サンプル画像ギャラリー ============================== #}
+  {% if samples %}
+    <section class="entry__section gallery" aria-label="サンプル画像">
+      <h2>サンプル画像</h2>
+      <div class="gallery__grid">
+        {% for url in samples if url %}
+          <figure class="gallery__item">
+            {% if official_url %}
+              <a
+                href="{{ official_url }}"
+                target="_blank"
+                rel="sponsored noopener"
+                class="gallery__link"
+                aria-label="公式ストアで {{ title }} を見る (サンプル {{ loop.index }})"
+              >
+                <img
+                  src="{{ url }}"
+                  alt="{{ title }} のサンプル画像 {{ loop.index }}"
+                  loading="lazy"
+                  decoding="async"
+                >
+              </a>
+            {% else %}
+              <img
+                src="{{ url }}"
+                alt="{{ title }} のサンプル画像 {{ loop.index }}"
+                loading="lazy"
+                decoding="async"
+              >
+            {% endif %}
+            <figcaption class="gallery__cap">
+              {{ title }} サンプル{{ loop.index }}
+            </figcaption>
+          </figure>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+  {# ============================== 注意喚起 ============================== #}
+  <aside class="notice notice--legal" role="note" aria-label="閲覧に関する注意">
+    <strong class="notice__hd">公式配信で安全に楽しもう</strong>
+    <p class="notice__tx">
+      海賊版サイトや違法アップロードの閲覧は、著作権侵害の助長だけでなく
+      マルウェア感染・個人情報の流出などのリスクがあります。作品は必ず
+      公式の配信サイトで読んでください。
+    </p>
+    <p class="notice__tx">
+      公式サービスなら高画質・安定表示・年齢確認などの安全対策が整っており、
+      クリエイターやサークルに正しく対価が届きます。初めての方は、
+      作品ページの説明や利用規約を確認してからご利用ください。
+    </p>
+    <ul class="notice__list">
+      <li>URLが正規ドメイン（例：<code>dmm.co.jp</code>）かを確認する</li>
+      <li>外部ダウンロードの強要や過剰なポップアップが出るサイトは利用しない</li>
+      <li>本ページのリンクは <em>スポンサー付き</em> です。料金等は公式表記を必ず確認</li>
+    </ul>
+  </aside>
+
+  {# ============================== 2nd CTA ============================== #}
+  {% if official_url %}
+    <p class="cta cta--bottom">
+      <a
+        class="cta__btn"
+        href="{{ official_url }}"
+        target="_blank"
+        rel="sponsored noopener"
+      >
+        <span>公式ストアで『{{ title }}』を読む</span>
+      </a>
+    </p>
+  {% endif %}
+
+  {# ============================== 構造化データ: Book (簡易版) ============================== #}
+  {% if has_visual %}
+    <script type="application/ld+json">
+    {{
+      {
+        "@context": "https://schema.org",
+        "@type": "Book",
+        "name": item.title,
+        "bookFormat": "EBook",
+        "inLanguage": "ja",
+        "author": authors_str,
+        "publisher": item.maker or item.label or "",
+        "genre": genres_str,
+        "datePublished": item.date or "",
+        "image": cover_url or "",
+        "url": official_url or "",
+        "sameAs": official_url or "",
+        "identifier": item.cid or ""
+      }
+      | tojson | safe
+    }}
+    </script>
+
+  {% endif %}
+
+</article>
+
+{# ============================== スタイル（ピンク＆ホワイト） ============================== #}
+<style>
+/* ====== Theme Vars ====== */
+.entry.entry--book[data-tpl="book-v2"]{
+  --gap:14px;
+  --radius:12px;
+  --bg:#ffffff;
+  --fg:#111111;
+  --fg-weak:#555555;
+  --brand:#ff7cb5;       /* メインピンク */
+  --brand-deep:#e8408b;  /* 濃いピンク（枠） */
+  --brand-soft:#ffe0f0;  /* 薄いピンク背景 */
+  --warn:#ffe6f2;
+  --warn-border:#f0a4c7;
+}
+
+/* ====== Base ====== */
+.entry.entry--book[data-tpl="book-v2"]{
+  color:var(--fg);
+  background:transparent;
+}
+.entry.entry--book[data-tpl="book-v2"] a{
+  color:inherit;
+  text-decoration:none;
+}
+.entry.entry--book[data-tpl="book-v2"] a:hover{
+  text-decoration:underline;
+}
+
+.entry.entry--book[data-tpl="book-v2"] .entry__header{
+  margin:0 0 .8rem;
+}
+.entry.entry--book[data-tpl="book-v2"] .entry__title{
+  font-size:clamp(1.2rem,1.4vw+1rem,1.9rem);
+  line-height:1.35;
+  margin:0 0 .25rem;
+  font-weight:800;
+}
+.entry.entry--book[data-tpl="book-v2"] .entry__subtitle{
+  margin:0;
+  font-size:.9rem;
+  color:var(--fg-weak);
+}
+.entry.entry--book[data-tpl="book-v2"] .entry__cid{
+  font-weight:700;
+}
+
+/* ====== Lead ====== */
+.entry.entry--book[data-tpl="book-v2"] .entry__lead{
+  display:flex;
+  flex-wrap:wrap;
+  gap:14px;
+  margin:0 0 1.1rem;
+}
+.entry.entry--book[data-tpl="book-v2"] .lead__image{
+  flex:0 0 180px;
+  max-width:220px;
+  margin:0;
+}
+.entry.entry--book[data-tpl="book-v2"] .lead__img{
+  display:block;
+  width:100%;
+  height:auto;
+  border-radius:var(--radius);
+  box-shadow:0 4px 12px rgba(0,0,0,.12);
+}
+.entry.entry--book[data-tpl="book-v2"] .lead__body{
+  flex:1 1 220px;
+  min-width:220px;
+}
+.entry.entry--book[data-tpl="book-v2"] .lead__catch{
+  margin:.1rem 0 .9rem;
+  line-height:1.9;
+}
+.entry.entry--book[data-tpl="book-v2"] .lead__note{
+  margin:.35rem 0 0;
+  font-size:.85rem;
+  color:var(--fg-weak);
+}
+
+/* ====== CTA ====== */
+.entry.entry--book[data-tpl="book-v2"] .cta{
+  margin:1rem 0 0;
+}
+.entry.entry--book[data-tpl="book-v2"] .cta--lead{
+  margin:.2rem 0 0;
+}
+.entry.entry--book[data-tpl="book-v2"] .cta--bottom{
+  margin:1.1rem 0 0;
+}
+.entry.entry--book[data-tpl="book-v2"] .cta__btn{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:100%;
+  box-sizing:border-box;
+  background:var(--brand);
+  color:#fff;
+  border-radius:999px;
+  border:2px solid var(--brand-deep);
+  padding:.9rem 1.25rem;
+  font-weight:900;
+  font-size:clamp(1rem,0.9rem + 0.6vw,1.25rem);
+  line-height:1.2;
+  text-align:center;
+  letter-spacing:.02em;
+  box-shadow:0 6px 0 rgba(0,0,0,.22);
+  transition:transform .03s, box-shadow .2s, filter .2s;
+}
+.entry.entry--book[data-tpl="book-v2"] .cta__btn span{
+  line-height:1.2;
+}
+.entry.entry--book[data-tpl="book-v2"] .cta__btn:hover{
+  filter:brightness(0.97);
+  box-shadow:0 3px 0 rgba(0,0,0,.22);
+  transform:translateY(3px);
+}
+.entry.entry--book[data-tpl="book-v2"] .cta__btn:active{
+  transform:translateY(6px);
+  box-shadow:0 0 0 rgba(0,0,0,0);
+}
+.entry.entry--book[data-tpl="book-v2"] .cta__btn:focus-visible{
+  outline:3px solid var(--brand-deep);
+  outline-offset:3px;
+}
+
+/* ====== Meta（表風の囲み） ====== */
+.entry.entry--book[data-tpl="book-v2"] .entry__meta{
+  margin:0 0 1.2rem;
+}
+.entry.entry--book[data-tpl="book-v2"] .meta__title{
+  font-size:1.05rem;
+  margin:0 0 .4rem;
+  font-weight:700;
+}
+.entry.entry--book[data-tpl="book-v2"] .meta{
+  display:grid !important;
+  grid-template-columns:8.5em 1fr !important;
+  background:#fff;
+  border:1px solid #f3b9d4;
+  border-radius:10px;
+  overflow:hidden;
+}
+.entry.entry--book[data-tpl="book-v2"] .meta__row{
+  display:contents !important;
+}
+.entry.entry--book[data-tpl="book-v2"] .meta__row > dt,
+.entry.entry--book[data-tpl="book-v2"] .meta__row > dd{
+  padding:9px 12px;
+  border-bottom:1px solid #f7d3e4;
+  line-height:1.6;
+}
+.entry.entry--book[data-tpl="book-v2"] .meta__row > dt{
+  grid-column:1 !important;
+  background:#fff4fa;
+  font-weight:700;
+  color:#b03c7c;
+  border-right:1px solid #f3b9d4;
+  white-space:nowrap;
+}
+.entry.entry--book[data-tpl="book-v2"] .meta__row > dd{
+  grid-column:2 !important;
+  margin:0 !important;
+  display:flex !important;
+  flex-wrap:wrap !important;
+  gap:6px 8px !important;
+  align-items:center !important;
+  word-break:normal !important;
+}
+.entry.entry--book[data-tpl="book-v2"] .meta__row:last-of-type > dt,
+.entry.entry--book[data-tpl="book-v2"] .meta__row:last-of-type > dd{
+  border-bottom:none !important;
+}
+.entry.entry--book[data-tpl="book-v2"] .meta__row > dd > *{
+  flex:0 0 auto !important;
+  display:inline-flex !important;
+  align-items:center;
+  white-space:nowrap !important;
+  word-break:keep-all !important;
+}
+
+/* チップ */
+.entry.entry--book[data-tpl="book-v2"] .chip{
+  background:#fff0f7;
+  border:1px solid #f1b4d4;
+  border-radius:999px;
+  padding:.15rem .6rem;
+  font-size:.88em;
+}
+
+/* ====== Section base ====== */
+.entry.entry--book[data-tpl="book-v2"] .entry__section{
+  margin:0 0 1.2rem;
+}
+.entry.entry--book[data-tpl="book-v2"] .entry__section h2{
+  font-size:1.05rem;
+  margin:0 0 .45rem;
+  font-weight:700;
+}
+.entry.entry--book[data-tpl="book-v2"] .entry__section p{
+  margin:.25rem 0;
+  line-height:1.9;
+}
+
+/* ====== Gallery ====== */
+.entry.entry--book[data-tpl="book-v2"] .gallery__grid{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:12px;
+}
+.entry.entry--book[data-tpl="book-v2"] .gallery__item{
+  margin:0;
+}
+.entry.entry--book[data-tpl="book-v2"] .gallery__item img{
+  display:block;
+  width:100%;
+  height:auto;
+  border-radius:8px;
+  background:#f7f7f7;
+}
+.entry.entry--book[data-tpl="book-v2"] .gallery__cap{
+  font-size:.88rem;
+  margin:.3rem 0 0;
+  color:var(--fg-weak);
+}
+
+/* ====== Notice ====== */
+.entry.entry--book[data-tpl="book-v2"] .notice{
+  position:relative;
+  border:2px solid var(--warn-border);
+  background:var(--warn);
+  border-radius:12px;
+  padding:14px 16px 14px 48px;
+  margin:0 0 1rem;
+  box-shadow:0 2px 0 rgba(0,0,0,.04);
+}
+.entry.entry--book[data-tpl="book-v2"] .notice::before{
+  content:"";
+  position:absolute;
+  inset:10px auto 10px 10px;
+  width:6px;
+  border-radius:4px;
+  background:linear-gradient(180deg,#ffc4e0,#f0a4c7);
+}
+.entry.entry--book[data-tpl="book-v2"] .notice__hd{
+  display:block;
+  font-weight:900;
+  margin:0 0 .25rem;
+}
+.entry.entry--book[data-tpl="book-v2"] .notice__tx{
+  margin:.35rem 0;
+  line-height:1.9;
+}
+.entry.entry--book[data-tpl="book-v2"] .notice__list{
+  margin:.45rem 0 0 1.2rem;
+}
+.entry.entry--book[data-tpl="book-v2"] .notice__list li{
+  margin:.2rem 0;
+}
+
+/* ====== 遅延レイアウト（CLS軽減） ====== */
+.entry.entry--book[data-tpl="book-v2"] .gallery,
+.entry.entry--book[data-tpl="book-v2"] .entry__meta,
+.entry.entry--book[data-tpl="book-v2"] .notice{
+  content-visibility:auto;
+  contain-intrinsic-size:800px;
+}
+
+/* ====== Responsive ====== */
+@media (max-width:599px){
+  .entry.entry--book[data-tpl="book-v2"] .entry__lead{
+    flex-direction:column;
+  }
+  .entry.entry--book[data-tpl="book-v2"] .lead__image{
+    max-width:260px;
+  }
+}
+</style>

@@ -15,6 +15,7 @@ from app.core.csv_dedupe import load_skip_cids, append_ledger, load_skip_cids_in
 from app.core.image_mirror import mirror_item_images
 from pathlib import Path
 import traceback
+from app.providers import fanza_book
 
 from urllib.parse import urlparse
 import os, mimetypes, requests, io
@@ -294,6 +295,18 @@ def _ensure_featured_media_external(wp, url: str, row: dict) -> int | None:
         return wp.upload_media_from_url(url, fname_try)
 
 def run_pipeline(args) -> Dict[str, Any]:
+    # ====== どのProviderを使うかを決定 ======
+    site_upper = (args.site or "FANZA").upper()
+    is_books = site_upper in ("FANZA_BOOK", "FANZA-BOOK", "FANZA/EBOOK")
+    if is_books:
+        _fetch = fanza_book.fetch_items
+        _normalize = fanza_book.normalize_item
+        _build = fanza_book.build_content_html
+    else:
+        _fetch = fetch_items
+        _normalize = normalize_item
+        _build = build_content_html
+        
     # ====== クエリパラメータ組み立て ======
     params = dict(
         site=args.site,
@@ -348,7 +361,7 @@ def run_pipeline(args) -> Dict[str, Any]:
 
     # ====== 取得ループ ======
     while got < args.max and (target_new == 0 or new_count < target_new):
-        data = fetch_items(args.api_id, args.affiliate_id, params, start=offset, hits=args.hits)
+        data = _fetch(args.api_id, args.affiliate_id, params, start=offset, hits=args.hits)
         result = data.get("result") or {}
         items = result.get("items") or []
         if not items:
@@ -363,7 +376,7 @@ def run_pipeline(args) -> Dict[str, Any]:
 
         for it in items:
             # -- 標準化 → 事前フィルタ・補強 --
-            row = normalize_item(it)
+            row = _normalize(it)
 
             # === 画像ミラー（本文生成の直前に実施：直前で上書きされるのを防ぐ） ===
             if getattr(args, 'mirror_images', False):
@@ -382,20 +395,24 @@ def run_pipeline(args) -> Dict[str, Any]:
                     except Exception as e:
                         print(f"[mirror] skip {cid_for_name}: {e}")
 
-            # --- プレイヤーサイズ注入 & iframeサイズ補正 ---
-            W, H, ratio = get_player_size_from_env()
-            row["player_width"] = W
-            row["player_height"] = H
-            row["aspect_ratio"] = ratio  # 例: 56.25
-            if row.get("trailer_embed"):
-               row["trailer_embed"] = row["trailer_embed"].replace("size=1280_720", f"size={W}_{H}")
+            # --- （動画のみ）プレイヤーサイズ注入 & iframeサイズ補正 ---
+            if not is_books:
+                W, H, ratio = get_player_size_from_env()
+                row["player_width"] = W
+                row["player_height"] = H
+                row["aspect_ratio"] = ratio  # 例: 56.25
+                if row.get("trailer_embed"):
+                    row["trailer_embed"] = row["trailer_embed"].replace("size=1280_720", f"size={W}_{H}")
 
             # --- CSVベース重複スキップ（記事単位） ---
             cid = (row.get("cid") or "").strip()
             if cid and cid in skip_cids:
                 continue
 
-            row = sanitize_trailer_fields(row)
+            # （動画のみ）トレーラーフィールドのサニタイズ
+            if not is_books:
+                row = sanitize_trailer_fields(row)
+
             row = _filter_and_enhance(row, args)
             if not row:
                 continue
@@ -419,14 +436,14 @@ def run_pipeline(args) -> Dict[str, Any]:
                              error=f"template_not_found: {p}", cid=row.get("cid"))
                     # テンプレが物理的に無い時だけ従来HTMLへ落とす
                     row["content"] = "<!-- tpl:missing -->" + \
-                                     build_content_html(row, content_builder=None, max_gallery=max_gallery)
+                                     _build(row, content_builder=None, max_gallery=max_gallery)
                 else:
                     # ① post.html.j2 を直接描画
                     try:
                         # ContentBuilderはrender_fileを持たない実装なので、
                         # build_content_htmlにContentBuilder(template_path=...)を渡して描画する
                         cb = ContentBuilder(template_path=str(p))
-                        html = build_content_html(row, content_builder=cb, max_gallery=max_gallery)
+                        html = _build(row, content_builder=cb, max_gallery=max_gallery)
                         row["content"] = "<!-- tpl:post -->" + html
                     except Exception as e1:
                         # ここで落ちたら“原因を隠さない”ために安易に content.html.j2 へは落とさない
@@ -434,7 +451,7 @@ def run_pipeline(args) -> Dict[str, Any]:
                                  error=f"post_tpl_render_failed: {e1}", cid=row.get("cid"))
                         # 最低限の保険だけ（従来HTML）。コメントで判別できるようにする
                         try:
-                            fallback = build_content_html(row, content_builder=None, max_gallery=max_gallery)
+                            fallback = _build(row, content_builder=None, max_gallery=max_gallery)
                             row["content"] = "<!-- tpl:content(fallback) -->" + fallback
                         except Exception as e2:
                             log_json("error", where="content_build",
@@ -443,7 +460,7 @@ def run_pipeline(args) -> Dict[str, Any]:
             else:
                 # テンプレ未指定：従来HTML
                 row["content"] = "<!-- tpl:content(default) -->" + \
-                                 build_content_html(row, content_builder=None, max_gallery=max_gallery)
+                                 _build(row, content_builder=None, max_gallery=max_gallery)
 
             # -- CSV運用（WPなし）の“新規”定義：skip_cids に無い → 新規として採用
             #    out_rows に入れたら new_count を加算
@@ -541,10 +558,35 @@ def run_pipeline(args) -> Dict[str, Any]:
 
                 tag_ids_for_post = wp.ensure_tags(merged_tag_names)
 
-                # 品番つきタイトル（WP投稿用）
+                # 投稿タイトル整形
                 def _fmt_title(r):
-                    cid = (r.get("cid") or "").strip()
-                    t   = (r.get("title") or "").strip()
+                    cid    = (r.get("cid") or "").strip()
+                    t      = (r.get("title") or "").strip()
+                    # 著者名（actress_clean があれば優先）
+                    author = (r.get("actress_clean") or r.get("actress") or "").strip()
+                    # サークル名（maker_clean 優先）
+                    circle = (r.get("maker_clean") or r.get("maker") or "").strip()
+
+                    svc   = (getattr(args, "service", "") or "").lower()
+                    floor = (getattr(args, "floor", "") or "").lower()
+
+                    # 1) 電子書籍（エロ漫画）: FANZA_BOOK or digital/comic + ebook
+                    is_ebook_service = svc in ("digital", "comic") and ("ebook" in floor)
+                    if is_books or is_ebook_service:
+                        if author:
+                            return f"[{author}] {t}"
+                        return t  # 著者が取れないときは素のタイトル
+
+                    # 2) 同人: service=doujin or floor に doujin を含む
+                    if svc == "doujin" or "doujin" in floor:
+                        if circle:
+                            return f"[{circle}] {t}"
+                        # 一応、author があればそっちも使う
+                        if author:
+                            return f"[{author}] {t}"
+                        return t
+
+                    # 3) それ以外（動画など）は従来通り [品番] タイトル
                     return f"[{cid}] {t}" if cid else t
 
                 if status == "future" and getattr(args, "future_datetime", None):

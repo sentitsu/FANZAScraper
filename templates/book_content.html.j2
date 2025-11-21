@@ -1,0 +1,226 @@
+{# ========================================================
+   エロ漫画(電子書籍)用 Post テンプレ — javmix-av.com
+   対応フィールド（fanza_book.normalize_item() + pipeline）:
+     - item.cid
+     - item.title
+     - item.URL         … 元作品URL（aff_url 済）
+     - item.aff_url     … make_aff_url 済のアフィURL
+     - item.date
+     - item.maker       … 出版社/サークル
+     - item.label       … レーベル
+     - item.series      … シリーズ名
+     - item.actress     … 著者名（カンマ区切り）
+     - item.genres      … ジャンル（カンマ区切り）
+     - item.genres_clean, item.actress_clean … pipeline で整形済み
+     - item.image_large … 表紙
+     - item.sample_images … サンプル画像URL '|' 連結
+   ======================================================== #}
+
+{# 公式リンクURLを1本にまとめる（aff_url 優先） #}
+{% set official_url = item.aff_url or item.URL or "" %}
+
+{# サンプル画像をリスト化 #}
+{% set sample_urls = (item.sample_images or "").split("|") if item.sample_images else [] %}
+
+{# 表紙画像（無ければサンプルの先頭） #}
+{% set cover_url = item.image_large or (sample_urls[0] if sample_urls else "") %}
+
+{# 表示用の著者・ジャンル #}
+{% set authors_str = item.actress_clean or item.actress or "" %}
+{% set genres_str  = item.genres_clean  or item.genres  or "" %}
+
+<article class="entry entry--book">
+  <header class="entry__header">
+    <h1 class="entry__title">
+      {{ item.title }}
+    </h1>
+    {% if item.cid %}
+      <p class="entry__subtitle entry__subtitle--cid">
+        作品ID: <span class="entry__cid">{{ item.cid }}</span>
+      </p>
+    {% endif %}
+  </header>
+
+  <div class="entry__lead lead">
+    <figure class="lead__image">
+      {% if cover_url %}
+        <img
+          src="{{ cover_url }}"
+          alt="{{ item.title }} の表紙"
+          loading="eager"
+          decoding="async"
+        >
+      {% endif %}
+    </figure>
+
+    <div class="lead__body">
+      <p class="lead__catch">
+        エロ漫画・電子書籍『{{ item.title }}』の見どころや魅力を、画像つきでわかりやすく紹介します。
+        違法アップロードではなく、公式配信で安全に楽しみたい人向けの解説です。
+      </p>
+
+      {% if official_url %}
+        <div class="lead__cta">
+          <a
+            class="btn btn--primary btn--lg"
+            href="{{ official_url }}"
+            target="_blank"
+            rel="sponsored noopener"
+          >
+            公式ストアで『{{ item.title }}』をチェックする
+          </a>
+          <p class="lead__note">
+            ※FANZA電子書籍の公式ページに移動します。
+          </p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ====== メタ情報（表形式） ====== #}
+  <section class="entry__meta meta">
+    <h2 class="meta__title">作品情報</h2>
+    <dl class="meta__table">
+      <div class="meta__row">
+        <dt>タイトル</dt>
+        <dd>{{ item.title }}</dd>
+      </div>
+
+      {% if authors_str %}
+      <div class="meta__row">
+        <dt>著者</dt>
+        <dd>{{ authors_str }}</dd>
+      </div>
+      {% endif %}
+
+      {% if item.maker %}
+      <div class="meta__row">
+        <dt>出版社 / サークル</dt>
+        <dd>{{ item.maker }}</dd>
+      </div>
+      {% endif %}
+
+      {% if item.label %}
+      <div class="meta__row">
+        <dt>レーベル</dt>
+        <dd>{{ item.label }}</dd>
+      </div>
+      {% endif %}
+
+      {% if item.series %}
+      <div class="meta__row">
+        <dt>シリーズ</dt>
+        <dd>{{ item.series }}</dd>
+      </div>
+      {% endif %}
+
+      {% if item.date %}
+      <div class="meta__row">
+        <dt>配信開始日</dt>
+        <dd>{{ item.date }}</dd>
+      </div>
+      {% endif %}
+
+      {% if genres_str %}
+      <div class="meta__row">
+        <dt>ジャンル</dt>
+        <dd>{{ genres_str }}</dd>
+      </div>
+      {% endif %}
+
+      <div class="meta__row">
+        <dt>配信サイト</dt>
+        <dd>FANZA 電子書籍</dd>
+      </div>
+
+      {% if item.cid %}
+      <div class="meta__row">
+        <dt>作品ID</dt>
+        <dd>{{ item.cid }}</dd>
+      </div>
+      {% endif %}
+    </dl>
+  </section>
+
+  {# ====== 本文（自動生成ベース。必要なら後で手動追記OK） ====== #}
+  <section class="entry__section">
+    <h2>『{{ item.title }}』のあらすじ・内容</h2>
+    <p>
+      こちらの作品は、FANZAが公式配信しているエロ漫画・電子書籍です。
+      ここではネタバレにならない範囲で、作品の雰囲気や魅力を簡単に紹介します。
+    </p>
+    <p>
+      （※必要に応じて、この本文ブロックは後で手動で書き換えてください。自動生成部分のため、最小限の説明だけ入れています）
+    </p>
+  </section>
+
+  <section class="entry__section">
+    <h2>安全な公式配信で楽しもう</h2>
+    <p>
+      インターネット上の違法アップロード・違法視聴は、作品の制作者や関係者に大きな損害を与えます。
+      また、ウイルス感染やフィッシング被害など、利用者側にもリスクがあります。
+    </p>
+    <p>
+      『{{ item.title }}』を含むエロ漫画・同人作品は、必ず公式の配信サイトで安全に楽しみましょう。
+    </p>
+
+    {% if official_url %}
+      <p class="entry__cta-bottom">
+        <a
+          class="btn btn--primary btn--block"
+          href="{{ official_url }}"
+          target="_blank"
+          rel="sponsored noopener"
+        >
+          公式ストアで『{{ item.title }}』を読む
+        </a>
+      </p>
+    {% endif %}
+  </section>
+
+  {# ====== ギャラリー（サンプル画像） ====== #}
+  {% if sample_urls %}
+  <section class="entry__section gallery">
+    <h2>サンプル画像</h2>
+    <div class="gallery__grid">
+      {% for url in sample_urls %}
+        {% if url %}
+        <figure class="gallery__item">
+          <img
+            src="{{ url }}"
+            alt="{{ item.title }} のサンプル画像 {{ loop.index }}"
+            loading="lazy"
+            decoding="async"
+          >
+          <figcaption class="gallery__cap">
+            {{ item.title }} サンプル{{ loop.index }}
+          </figcaption>
+        </figure>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ====== 構造化データ: Book (簡易版) ====== #}
+  <script type="application/ld+json">
+  {{
+    {
+      "@context": "https://schema.org",
+      "@type": "Book",
+      "name": item.title,
+      "bookFormat": "EBook",
+      "inLanguage": "ja",
+      "author": authors_str,
+      "publisher": item.maker or item.label or "",
+      "genre": genres_str,
+      "datePublished": item.date or "",
+      "image": cover_url or "",
+      "url": official_url or "",
+      "sameAs": official_url or "",
+      "identifier": item.cid or ""
+    }
+    | tojson(indent=2, ensure_ascii=False) | safe
+  }}
+  </script>
+</article>
