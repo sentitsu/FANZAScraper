@@ -41,9 +41,14 @@ def fetch_items(api_id: str, affiliate_id: str, params: Dict[str, Any],
     """FANZA の『エロマンガ / 同人』専用 ItemList ラッパー。"""
     site, service, floor = _resolve_book_service_floor(params)
 
+    # 作品情報取得用 affiliate_id:
+    #  - CLI 引数があればそれを優先
+    #  - 無ければ config.API_AFFILIATE_ID（FANZA_API_AFFILIATE_ID or AFFILIATE_ID）を使う
+    api_aff_id = affiliate_id or getattr(CFG, "API_AFFILIATE_ID", CFG.AFFILIATE_ID)
+
     q = {
         "api_id": api_id or CFG.API_ID,
-        "affiliate_id": affiliate_id or CFG.AFFILIATE_ID,
+        "affiliate_id": api_aff_id,
         "site": site,        # 常に FANZA
         "service": service,  # ebook or doujin
         "floor": floor,      # comic or digital_doujin

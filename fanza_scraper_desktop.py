@@ -338,11 +338,22 @@ class App(tk.Tk):
 
         # API/AFFILIATE
         self.var_api_id = tk.StringVar(value=os.getenv("API_ID", ""))
-        self.var_affid = tk.StringVar(value=os.getenv("AFFILIATE_ID", ""))
-        envf = ttk.LabelFrame(tab_advanced, text="APIキー（環境変数として注入）")
+        # 作品情報取得用 affiliate_id（APIに渡す用）
+        self.var_affid_api = tk.StringVar(
+            value=os.getenv("FANZA_API_AFFILIATE_ID", os.getenv("AFFILIATE_ID", ""))
+        )
+        # 実際のリンク用 affiliate_id（WordPress に貼るアフィリンク用）
+        self.var_affid_link = tk.StringVar(
+            value=os.getenv("FANZA_LINK_AFFILIATE_ID", os.getenv("AFFILIATE_ID", ""))
+        )
+        envf = ttk.LabelFrame(
+            tab_advanced,
+            text="APIキー / アフィリエイトID（環境変数として注入）",
+        )
         envf.pack(fill=tk.X, padx=6, pady=6)
         add_labeled_entry(envf, "API_ID", self.var_api_id)
-        add_labeled_entry(envf, "AFFILIATE_ID", self.var_affid)
+        add_labeled_entry(envf, "FANZA_API_AFFILIATE_ID（取得用）", self.var_affid_api)
+        add_labeled_entry(envf, "FANZA_LINK_AFFILIATE_ID（リンク用）", self.var_affid_link)
 
         # Buttons + Log
         btns = ttk.Frame(root)
@@ -502,8 +513,17 @@ class App(tk.Tk):
         # APIキー/アフィリエイトID：引数でも渡して良いが既存mainは環境変数優先なのでここで注入
         if self.var_api_id.get().strip():
             env["API_ID"] = self.var_api_id.get().strip()
-        if self.var_affid.get().strip():
-            env["AFFILIATE_ID"] = self.var_affid.get().strip()
+
+        api_aff = self.var_affid_api.get().strip()
+        link_aff = self.var_affid_link.get().strip()
+
+        if api_aff:
+            # 作品情報取得用 affiliate_id（APIに渡す用）
+            env["FANZA_API_AFFILIATE_ID"] = api_aff
+        if link_aff:
+            # リンク用 affiliate_id。後方互換のため AFFILIATE_ID にも入れておく
+            env["FANZA_LINK_AFFILIATE_ID"] = link_aff
+            env["AFFILIATE_ID"] = link_aff
         # WP
         if self.var_wp_url.get().strip():
             env["WP_URL"] = self.var_wp_url.get().strip()

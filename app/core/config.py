@@ -9,10 +9,19 @@ from typing import Tuple, Optional
 load_dotenv()
 
 # ---- ENV / Defaults --------------------------------------------------------
+API_ID: str = os.getenv("API_ID", os.getenv("DMM_API_ID", "")).strip()
 AFFILIATE_ID: str = os.getenv("AFFILIATE_ID", "").strip()
 AFFILIATE_REDIRECT: str = os.getenv("AFFILIATE_REDIRECT", "https://al.dmm.com").strip().rstrip("/")
 # 任意: 外層に &ch=xxx を付けたい場合に使う（無ければ付けない）
 AFFILIATE_CH: str = os.getenv("AFFILIATE_CH", "").strip()
+
+# 作品情報取得用 affiliate_id（APIに渡す用）
+# 未指定なら AFFILIATE_ID を流用して後方互換にする
+API_AFFILIATE_ID: str = os.getenv("FANZA_API_AFFILIATE_ID", "").strip() or AFFILIATE_ID
+
+# 実際にサイトに貼るリンク用 affiliate_id
+# 未指定なら AFFILIATE_ID を流用
+LINK_AFFILIATE_ID: str = os.getenv("FANZA_LINK_AFFILIATE_ID", "").strip() or AFFILIATE_ID
 
 # 例: "1280_720"
 IFRAME_SIZE: str = os.getenv("FANZA_IFRAME_SIZE", "1280_720").strip()
@@ -86,9 +95,9 @@ def make_aff_url(base: Optional[str]) -> str:
     # 既存の al.* ラップを剥がす
     final = _unwrap_aff_url(base)
 
-    # 包み直し
-    if AFFILIATE_ID and AFFILIATE_REDIRECT:
-        aff = f"{AFFILIATE_REDIRECT}/?lurl={quote(final, safe='')}&af_id={AFFILIATE_ID}"
+    # 包み直し（リンク用 affiliate_id を使用）
+    if LINK_AFFILIATE_ID and AFFILIATE_REDIRECT:
+        aff = f"{AFFILIATE_REDIRECT}/?lurl={quote(final, safe='')}&af_id={LINK_AFFILIATE_ID}"
         if AFFILIATE_CH:
             aff += f"&ch={quote(AFFILIATE_CH, safe='')}"
         return aff
@@ -98,9 +107,12 @@ def make_aff_url(base: Optional[str]) -> str:
 
 
 __all__ = [
+    "API_ID",
     "AFFILIATE_ID",
     "AFFILIATE_REDIRECT",
     "AFFILIATE_CH",
+    "API_AFFILIATE_ID",
+    "LINK_AFFILIATE_ID",
     "FANZA_IFRAME_W",
     "FANZA_IFRAME_H",
     "FANZA_IFRAME_RATIO",

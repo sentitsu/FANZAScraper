@@ -3,6 +3,7 @@ import os, argparse, json
 from dotenv import load_dotenv
 from app.core.pipeline import run_pipeline
 from app.util.logger import log_json
+from app.core import config as CFG
 from pathlib import Path
 import sys
 
@@ -37,8 +38,11 @@ def _load_env():
 def build_args():
     ap = argparse.ArgumentParser(description="FANZA → WordPress 自動投稿（CSV/REST両対応）")
     # 取得系
-    ap.add_argument("--api-id", default=os.getenv("API_ID"))
-    ap.add_argument("--affiliate-id", default=os.getenv("AFFILIATE_ID"))
+    # api-id は .env の API_ID or DMM_API_ID を既定値に
+    ap.add_argument("--api-id", default=os.getenv("API_ID") or os.getenv("DMM_API_ID"))
+    # affiliate-id は「取得用 (FANZA_API_AFFILIATE_ID)」を直接渡したいときだけ指定する。
+    # 既定は空にして、providers 側で config.API_AFFILIATE_ID を使わせる。
+    ap.add_argument("--affiliate-id", default="")
     
     ap.add_argument("--site", default="FANZA")
     ap.add_argument("--service", default="digital")
@@ -113,11 +117,18 @@ def run():
     _load_env()
     args = build_args().parse_args()
 
-    # ★ 前提チェック：キー未設定なら即わかるように
-    if not args.api_id or not args.affiliate_id:
-        missing = []
-        if not args.api_id: missing.append("API_ID / --api-id")
-        if not args.affiliate_id: missing.append("AFFILIATE_ID / --affiliate-id")
+    # ★ 前提チェック：
+    #   - api_id は必須（APIキー）
+    #   - affiliate_id は「引数 or config.API_AFFILIATE_ID」のどちらかがあればOK
+    missing = []
+    if not args.api_id:
+        missing.append("API_ID / DMM_API_ID / --api-id")
+
+    # config.API_AFFILIATE_ID は FANZA_API_AFFILIATE_ID or AFFILIATE_ID から構成される
+    if not (args.affiliate_id or getattr(CFG, "API_AFFILIATE_ID", "")):
+        missing.append("FANZA_API_AFFILIATE_ID / AFFILIATE_ID / --affiliate-id")
+
+    if missing:
         raise SystemExit("Missing required DMM API credentials: " + ", ".join(missing))
 
     result = run_pipeline(args)

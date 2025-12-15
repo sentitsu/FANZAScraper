@@ -170,9 +170,17 @@ def build_content_html(row, content_builder: ContentBuilder | None = None, max_g
     return "\n".join(parts)
 
 def fetch_items(api_id, affiliate_id, params, start=1, hits=100):
+    # api_id が空なら config.API_ID を使う（無ければそのまま）
+    api_id = api_id or getattr(config, "API_ID", None)
+
+    # 作品情報取得用 affiliate_id:
+    #  - CLI 引数があればそれを優先
+    #  - 無ければ config.API_AFFILIATE_ID（FANZA_API_AFFILIATE_ID or AFFILIATE_ID）を使う
+    api_aff_id = affiliate_id or getattr(config, "API_AFFILIATE_ID", config.AFFILIATE_ID)
+
     q = {
         "api_id": api_id,
-        "affiliate_id": affiliate_id,
+        "affiliate_id": api_aff_id,
         "output": "json",
         "site": params.get("site", "FANZA"),
         "service": params.get("service", "digital"),
@@ -443,9 +451,16 @@ def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
     row.update(_extract_trailer_fields(it))
 
     if not row.get("trailer_embed"):
+        # iframe の affi_id には “リンク用 ID” を使う
+        # （未定義の場合は AFFILIATE_ID にフォールバック）
+        try:
+            aff_for_iframe = config.LINK_AFFILIATE_ID
+        except AttributeError:
+            aff_for_iframe = config.AFFILIATE_ID
+
         auto_src = build_fanza_iframe_src(
             row.get("cid"),
-            config.AFFILIATE_ID,
+            aff_for_iframe,
             config.IFRAME_SIZE,
         )
         row["trailer_embed"] = auto_src
