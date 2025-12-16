@@ -27,14 +27,36 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
+# プロファイル保存（WP/APIキー一式）
+try:
+    from profile_store import ProfileStore, DesktopProfile
+except Exception:  # パッケージ構成が変わっても GUI が落ちないように
+    ProfileStore = None  # type: ignore
+    DesktopProfile = None  # type: ignore
+
 APP_TITLE = "FANZA Scraper Desktop"
 
+# ------------------ Service/Floor Presets ------------------
+# GUI で site/service/floor を“まとめて選ぶ”ためのプリセット。
+# 追加したいときは、このリストに 1 行足すだけでOK（UIは自動で増える）。
+#
+# 形式: ("表示名", {"site": "...", "service": "...", "floor": "..."})
+SERVICE_FLOOR_PRESETS = [
+    ("動画（FANZA / digital / videoa）", {"site": "FANZA", "service": "digital", "floor": "videoa"}),
+    ("素人（FANZA / digital / videoc）", {"site": "FANZA", "service": "digital", "floor": "videoc"}),
+    ("同人（FANZA / doujin / digital_doujin）", {"site": "FANZA", "service": "doujin", "floor": "digital_doujin"}),
+    # 例: 追加したい場合
+    # ("エロマンガ（FANZA / ebook / comic）", {"site": "FANZA", "service": "ebook", "floor": "comic"}),
+]
+
 # ------------------ Helpers ------------------
-def add_labeled_entry(parent, label, textvar, width=0, show=None, placeholder=None):
+def add_labeled_entry(parent, label, textvar, width=0, show=None, placeholder=None, state=None):
     row = ttk.Frame(parent)
     row.pack(fill=tk.X, padx=8, pady=4)
     ttk.Label(row, text=label, width=20, anchor=tk.W).pack(side=tk.LEFT)
     ent = ttk.Entry(row, textvariable=textvar, show=show)
+    if state:
+        ent.config(state=state)
     if width:
         ent.config(width=width)
     ent.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -90,6 +112,160 @@ class ProcessRunner:
                 pass
         self._stop.set()
 
+class ProfileManagerDialog(tk.Toplevel):
+    """WP/APIキー一式をプロファイルとして保存・編集するダイアログ。"""
+
+    def __init__(self, master: tk.Misc, store: "ProfileStore"):
+        super().__init__(master)
+        self.title("プロファイル管理")
+        self.geometry("780x420")
+        self.resizable(True, True)
+        self.store = store
+
+        # Vars
+        self.var_name = tk.StringVar()
+        self.var_wp_url = tk.StringVar()
+        self.var_wp_user = tk.StringVar()
+        self.var_wp_app = tk.StringVar()
+        self.var_api_id = tk.StringVar()
+        self.var_aff_api = tk.StringVar()
+        self.var_aff_link = tk.StringVar()
+
+        self._build_ui()
+        self._reload_list()
+
+        # モーダルっぽくする
+        self.transient(master)
+        self.grab_set()
+
+    def _build_ui(self):
+        root = ttk.Frame(self)
+        root.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        cols = ttk.Frame(root)
+        cols.pack(fill=tk.BOTH, expand=True)
+
+        # 左：一覧
+        left = ttk.Frame(cols)
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=False)
+        ttk.Label(left, text="一覧").pack(anchor=tk.W)
+        self.lst = tk.Listbox(left, height=14)
+        self.lst.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+        self.lst.bind("<<ListboxSelect>>", lambda _e: self._on_select())
+
+        # 右：編集
+        right = ttk.Frame(cols)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0))
+        ttk.Label(right, text="編集（保存時のみ入力。普段は一覧から選ぶだけ）").pack(anchor=tk.W)
+
+        form = ttk.LabelFrame(right, text="プロファイル")
+        form.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+
+        add_labeled_entry(form, "NAME", self.var_name)
+        add_labeled_entry(form, "WP_URL", self.var_wp_url)
+        add_labeled_entry(form, "WP_USER", self.var_wp_user)
+        add_labeled_entry(form, "WP_APP_PASS", self.var_wp_app, show="*")
+        add_labeled_entry(form, "API_ID", self.var_api_id)
+        add_labeled_entry(form, "FANZA_API_AFFILIATE_ID", self.var_aff_api)
+        add_labeled_entry(form, "FANZA_LINK_AFFILIATE_ID", self.var_aff_link)
+
+        btns = ttk.Frame(right)
+        btns.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btns, text="新規", command=self._new).pack(side=tk.LEFT)
+        ttk.Button(btns, text="保存/更新", command=self._save).pack(side=tk.LEFT, padx=8)
+        ttk.Button(btns, text="削除", command=self._delete).pack(side=tk.LEFT)
+        ttk.Button(btns, text="閉じる", command=self.destroy).pack(side=tk.RIGHT)
+
+        ttk.Label(
+            right,
+            text="※ 平文保存です（共有PC/バックアップ/同期サービスに注意）",
+        ).pack(anchor=tk.W, pady=(8, 0))
+
+    def _reload_list(self, select: str | None = None):
+        self.lst.delete(0, tk.END)
+        names = self.store.list_names()
+        for n in names:
+            self.lst.insert(tk.END, n)
+
+        if select and select in names:
+            idx = names.index(select)
+            self.lst.selection_set(idx)
+            self.lst.see(idx)
+            self._load_to_form(select)
+
+    def _on_select(self):
+        sel = self.lst.curselection()
+        if not sel:
+            return
+        name = self.lst.get(sel[0])
+        self._load_to_form(name)
+
+    def _load_to_form(self, name: str):
+        p = self.store.get(name)
+        if not p:
+            return
+        self.var_name.set(p.name)
+        self.var_wp_url.set(p.WP_URL)
+        self.var_wp_user.set(p.WP_USER)
+        self.var_wp_app.set(p.WP_APP_PASS)
+        self.var_api_id.set(p.API_ID)
+        self.var_aff_api.set(p.FANZA_API_AFFILIATE_ID)
+        self.var_aff_link.set(p.FANZA_LINK_AFFILIATE_ID)
+
+    def _new(self):
+        self.var_name.set("")
+        self.var_wp_url.set("")
+        self.var_wp_user.set("")
+        self.var_wp_app.set("")
+        self.var_api_id.set("")
+        self.var_aff_api.set("")
+        self.var_aff_link.set("")
+        self.lst.selection_clear(0, tk.END)
+
+    def _save(self):
+        name = (self.var_name.get() or "").strip()
+        if not name:
+            messagebox.showerror("NAME が必要", "プロファイル名（NAME）を入力してください")
+            return
+
+        prof = DesktopProfile(
+            name=name,
+            WP_URL=(self.var_wp_url.get() or "").strip(),
+            WP_USER=(self.var_wp_user.get() or "").strip(),
+            WP_APP_PASS=(self.var_wp_app.get() or "").strip(),
+            API_ID=(self.var_api_id.get() or "").strip(),
+            FANZA_API_AFFILIATE_ID=(self.var_aff_api.get() or "").strip(),
+            FANZA_LINK_AFFILIATE_ID=(self.var_aff_link.get() or "").strip(),
+        )
+
+        self.store.upsert(prof)
+        self.store.set_last_selected(name)
+        try:
+            self.store.save()
+        except Exception as e:
+            messagebox.showerror("保存失敗", str(e))
+            return
+
+        self._reload_list(select=name)
+        messagebox.showinfo("保存完了", f"'{name}' を保存しました")
+
+    def _delete(self):
+        sel = self.lst.curselection()
+        if not sel:
+            messagebox.showerror("削除できません", "削除するプロファイルを一覧から選んでください")
+            return
+        name = self.lst.get(sel[0])
+        if not messagebox.askyesno("確認", f"'{name}' を削除しますか？"):
+            return
+        self.store.delete(name)
+        try:
+            self.store.save()
+        except Exception as e:
+            messagebox.showerror("保存失敗", str(e))
+            return
+        self._new()
+        self._reload_list()
+
 class App(tk.Tk):
     def _load_env(self):
         # exe なら exe のあるフォルダ、開発時は このファイルのフォルダ と CWD を順に探す
@@ -111,9 +287,27 @@ class App(tk.Tk):
         self.geometry("980x720")
         self.minsize(940, 680)
 
+        # ★ 先に属性だけ必ず作る（init途中で例外が起きても AttributeError を防ぐ）
+        self.profile_store = None
+
         self._load_env()
+
+        # ★ import 成功してる時だけロード
+        if ProfileStore:
+            self.profile_store = ProfileStore()
+            self.profile_store.load()
+
         self.runner = ProcessRunner(self._on_proc_line, self._on_proc_exit)
         self._build_ui()
+
+        # プリセット初期表示（現在の site/service/floor に一致するものがあれば選択）
+        self._sync_preset_from_vars()
+
+        # ★ 起動時にプロファイル反映
+        if self.profile_store and DesktopProfile:
+            self._bootstrap_profiles_from_env()
+            self._refresh_profile_list()
+            self._select_initial_profile()
 
     def _browse_outfile(self):
         from tkinter import filedialog
@@ -125,6 +319,38 @@ class App(tk.Tk):
         )
         if path:
             self.var_outfile.set(path)
+
+    # -------------- Presets --------------
+    def _on_preset_selected(self):
+        """
+        プリセットを選ぶと site/service/floor をまとめて反映する。
+        追加は SERVICE_FLOOR_PRESETS に 1 行足すだけ。
+        """
+        name = (self.var_preset.get() or "").strip()
+        if not name:
+            return
+        mapping = None
+        for n, v in SERVICE_FLOOR_PRESETS:
+            if n == name:
+                mapping = v
+                break
+        if not mapping:
+            return
+        self.var_site.set(mapping.get("site", ""))
+        self.var_service.set(mapping.get("service", ""))
+        self.var_floor.set(mapping.get("floor", ""))
+
+    def _sync_preset_from_vars(self):
+        """現在の site/service/floor と一致するプリセットがあれば選択状態にする（任意）。"""
+        cur = (self.var_site.get().strip(), self.var_service.get().strip(), self.var_floor.get().strip())
+        for name, v in SERVICE_FLOOR_PRESETS:
+            if (v.get("site", "").strip(), v.get("service", "").strip(), v.get("floor", "").strip()) == cur:
+                try:
+                    self.var_preset.set(name)
+                except Exception:
+                    pass
+                return
+
 
     # -------------- UI --------------
     def _build_ui(self):
@@ -151,6 +377,7 @@ class App(tk.Tk):
         self.var_site = tk.StringVar(value="FANZA")
         self.var_service = tk.StringVar(value="digital")
         self.var_floor = tk.StringVar(value="videoa")
+        self.var_preset = tk.StringVar(value="")
         self.var_keyword = tk.StringVar()
         self.var_cid = tk.StringVar()
         self.var_gte = tk.StringVar()
@@ -166,9 +393,36 @@ class App(tk.Tk):
 
         topA = ttk.LabelFrame(tab_basic, text="取得条件")
         topA.pack(fill=tk.X, padx=6, pady=6)
-        add_labeled_entry(topA, "site", self.var_site)
-        add_labeled_entry(topA, "service", self.var_service)
-        add_labeled_entry(topA, "floor", self.var_floor)
+
+        # プリセット（site/service/floor をまとめて切り替え）
+        row_preset = ttk.Frame(topA)
+        row_preset.pack(fill=tk.X, padx=8, pady=4)
+        ttk.Label(row_preset, text="プリセット", width=20, anchor=tk.W).pack(side=tk.LEFT)
+        self.cmb_preset = ttk.Combobox(
+            row_preset,
+            textvariable=self.var_preset,
+            state="readonly",
+            values=[name for name, _v in SERVICE_FLOOR_PRESETS],
+        )
+        self.cmb_preset.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.cmb_preset.bind("<<ComboboxSelected>>", lambda _e: self._on_preset_selected())
+
+        # site/service/floor（手入力もできるように Entry のまま）
+        row_ssf = ttk.Frame(topA)
+        row_ssf.pack(fill=tk.X, padx=8, pady=4)
+        ttk.Label(row_ssf, text="site", width=20, anchor=tk.W).pack(side=tk.LEFT)
+        ttk.Entry(row_ssf, textvariable=self.var_site).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        row_ssf2 = ttk.Frame(topA)
+        row_ssf2.pack(fill=tk.X, padx=8, pady=4)
+        ttk.Label(row_ssf2, text="service", width=20, anchor=tk.W).pack(side=tk.LEFT)
+        ttk.Entry(row_ssf2, textvariable=self.var_service).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        row_ssf3 = ttk.Frame(topA)
+        row_ssf3.pack(fill=tk.X, padx=8, pady=4)
+        ttk.Label(row_ssf3, text="floor", width=20, anchor=tk.W).pack(side=tk.LEFT)
+        ttk.Entry(row_ssf3, textvariable=self.var_floor).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         add_labeled_entry(topA, "keyword", self.var_keyword, placeholder="例: 単体女優")
         add_labeled_entry(topA, "cid", self.var_cid, placeholder="例: SSIS-123")
         add_labeled_entry(topA, "gte-date", self.var_gte, placeholder="YYYY-MM-DD")
@@ -299,6 +553,22 @@ class App(tk.Tk):
         ttk.Spinbox(row_g, from_=0, to=60, textvariable=self.var_maxgal, width=6).pack(side=tk.LEFT)
 
         # ---------- WordPress ----------
+        # プロファイル選択（WP/APIキー一式）
+        self.var_profile = tk.StringVar(value="")
+        prof = ttk.LabelFrame(tab_wp, text="接続プロファイル（WP/APIキー一式をまとめて保存）")
+        prof.pack(fill=tk.X, padx=6, pady=6)
+        rowp = ttk.Frame(prof)
+        rowp.pack(fill=tk.X, padx=8, pady=6)
+        ttk.Label(rowp, text="プロファイル").pack(side=tk.LEFT)
+        self.cmb_profile = ttk.Combobox(rowp, textvariable=self.var_profile, state="readonly", values=[])
+        self.cmb_profile.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
+        self.cmb_profile.bind("<<ComboboxSelected>>", lambda _e: self._on_profile_selected())
+        ttk.Button(rowp, text="管理...", command=self._open_profile_manager).pack(side=tk.LEFT)
+        ttk.Label(
+            prof,
+            text="※ profiles.json に平文で保存されます。共有PCでは注意。",
+        ).pack(anchor=tk.W, padx=8, pady=(0, 6))
+
         self.var_wp_post = tk.BooleanVar(value=False)
         self.var_wp_url = tk.StringVar(value=os.getenv("WP_URL", ""))
         self.var_wp_user = tk.StringVar(value=os.getenv("WP_USER", ""))
@@ -312,9 +582,12 @@ class App(tk.Tk):
         wpf = ttk.LabelFrame(tab_wp, text="WordPress 投稿設定")
         wpf.pack(fill=tk.X, padx=6, pady=6)
         ttk.Checkbutton(wpf, text="RESTで投稿する (--wp-post)", variable=self.var_wp_post).pack(fill=tk.X, padx=8, pady=4)
-        add_labeled_entry(wpf, "WP_URL", self.var_wp_url)
-        add_labeled_entry(wpf, "WP_USER", self.var_wp_user)
-        add_labeled_entry(wpf, "WP_APP_PASS", self.var_wp_app, show="*")
+
+        # プロファイル経由で入力するため、基本は編集不可（管理画面で編集）
+        add_labeled_entry(wpf, "WP_URL", self.var_wp_url, state="disabled")
+        add_labeled_entry(wpf, "WP_USER", self.var_wp_user, state="disabled")
+        add_labeled_entry(wpf, "WP_APP_PASS", self.var_wp_app, show="*", state="disabled")
+
         # ★ 画像をWPメディアへミラーして本文URLをローカル化
         ttk.Checkbutton(
             wpf, text="画像をWPにミラーして本文URLをローカル化 (--mirror-images)", variable=self.var_mirror
@@ -351,9 +624,11 @@ class App(tk.Tk):
             text="APIキー / アフィリエイトID（環境変数として注入）",
         )
         envf.pack(fill=tk.X, padx=6, pady=6)
-        add_labeled_entry(envf, "API_ID", self.var_api_id)
-        add_labeled_entry(envf, "FANZA_API_AFFILIATE_ID（取得用）", self.var_affid_api)
-        add_labeled_entry(envf, "FANZA_LINK_AFFILIATE_ID（リンク用）", self.var_affid_link)
+
+        # プロファイル経由で入力するため、基本は編集不可（管理画面で編集）
+        add_labeled_entry(envf, "API_ID", self.var_api_id, state="disabled")
+        add_labeled_entry(envf, "FANZA_API_AFFILIATE_ID（取得用）", self.var_affid_api, state="disabled")
+        add_labeled_entry(envf, "FANZA_LINK_AFFILIATE_ID（リンク用）", self.var_affid_link, state="disabled")
 
         # Buttons + Log
         btns = ttk.Frame(root)
@@ -368,6 +643,115 @@ class App(tk.Tk):
         self.txt = tk.Text(logf, wrap=tk.NONE, height=18)
         self.txt.pack(fill=tk.BOTH, expand=True)
         self._append_log(f"[{APP_TITLE}] 準備完了。\n")
+
+    # -------------- Profiles --------------
+    def _bootstrap_profiles_from_env(self):
+        """profiles.json が空のとき、.env の値で 'env' プロファイルを作る（静かに）。"""
+        store = getattr(self, "profile_store", None)
+        if not store or not DesktopProfile:
+            return
+
+        if store.list_names():
+            return
+
+        env_profile = DesktopProfile(
+            name="env",
+            WP_URL=os.getenv("WP_URL", ""),
+            WP_USER=os.getenv("WP_USER", ""),
+            WP_APP_PASS=os.getenv("WP_APP_PASS", ""),
+            API_ID=os.getenv("API_ID", ""),
+            FANZA_API_AFFILIATE_ID=os.getenv("FANZA_API_AFFILIATE_ID", os.getenv("AFFILIATE_ID", "")),
+            FANZA_LINK_AFFILIATE_ID=os.getenv("FANZA_LINK_AFFILIATE_ID", os.getenv("AFFILIATE_ID", "")),
+        )
+
+        # 何も入っていない env は作らない
+        if any([
+            env_profile.WP_URL,
+            env_profile.WP_USER,
+            env_profile.WP_APP_PASS,
+            env_profile.API_ID,
+            env_profile.FANZA_API_AFFILIATE_ID,
+            env_profile.FANZA_LINK_AFFILIATE_ID,
+        ]):
+            store.upsert(env_profile)
+            store.set_last_selected("env")
+            store.save()
+
+    def _refresh_profile_list(self):
+        if not self.profile_store:
+            return
+        names = self.profile_store.list_names()
+        try:
+            self.cmb_profile["values"] = names
+        except Exception:
+            pass
+
+    def _select_initial_profile(self):
+        if not self.profile_store:
+            return
+
+        names = self.profile_store.list_names()
+        if not names:
+            # 未作成なら空のまま（管理画面で作成してもらう）
+            return
+
+        last = self.profile_store.last_selected()
+        if last and last in names:
+            self.var_profile.set(last)
+            self._apply_profile(last)
+            return
+
+        # 先頭を選ぶ
+        self.var_profile.set(names[0])
+        self._apply_profile(names[0])
+
+    def _on_profile_selected(self):
+        name = (self.var_profile.get() or "").strip()
+        if not name:
+            return
+        self._apply_profile(name)
+
+    def _apply_profile(self, name: str):
+        if not self.profile_store:
+            return
+
+        prof = self.profile_store.get(name)
+        if not prof:
+            return
+
+        # 画面へ反映（state=disabledでも StringVar は更新可能）
+        self.var_wp_url.set(prof.WP_URL)
+        self.var_wp_user.set(prof.WP_USER)
+        self.var_wp_app.set(prof.WP_APP_PASS)
+        self.var_api_id.set(prof.API_ID)
+        self.var_affid_api.set(prof.FANZA_API_AFFILIATE_ID)
+        self.var_affid_link.set(prof.FANZA_LINK_AFFILIATE_ID)
+
+        # 記録
+        self.profile_store.set_last_selected(name)
+        self.profile_store.save()
+
+    def _open_profile_manager(self):
+        # ★ ここが重要：属性が無くても落ちないようにする
+        store = getattr(self, "profile_store", None)
+
+        if (store is None) or (DesktopProfile is None):
+            messagebox.showerror(
+                "利用できません",
+                "プロファイル機能が初期化されていません。\n"
+                "・profile_store.py / app.util.profile_store の import に失敗している\n"
+                "・App.__init__ で self.profile_store を作る前に例外で落ちている\n"
+                "のどちらかです。",
+            )
+            return
+
+        dlg = ProfileManagerDialog(self, store)
+        self.wait_window(dlg)
+
+        # 反映
+        self._refresh_profile_list()
+        self._select_initial_profile()
+
 
     def _append_log(self, line: str):
         self.txt.insert(tk.END, line + "\n")
@@ -492,7 +876,9 @@ class App(tk.Tk):
         if self.var_wp_post.get() or self.var_mirror.get():
             if not (self.var_wp_url.get().strip() and self.var_wp_user.get().strip() and self.var_wp_app.get().strip()):
                 messagebox.showerror(
-                    "設定不足", "WP_URL / WP_USER / WP_APP_PASS を入力してください（WP投稿 または 画像ミラーを有効にしています）。"
+                    "設定不足",
+                    "WP投稿/画像ミラーを有効にしていますが、WordPress 認証が空です。\n"
+                    "『WordPress』タブのプロファイルを選択するか、『管理...』で登録してください。",
                 )
                 return
 
