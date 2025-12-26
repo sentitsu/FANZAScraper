@@ -21,3 +21,4 @@ Thumbs.db
 .vscode/
 
 image_mirror_map.csv
+image_mirror_map__*.csv

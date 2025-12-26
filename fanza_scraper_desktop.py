@@ -45,6 +45,7 @@ SERVICE_FLOOR_PRESETS = [
     ("動画（FANZA / digital / videoa）", {"site": "FANZA", "service": "digital", "floor": "videoa"}),
     ("素人（FANZA / digital / videoc）", {"site": "FANZA", "service": "digital", "floor": "videoc"}),
     ("同人（FANZA / doujin / digital_doujin）", {"site": "FANZA", "service": "doujin", "floor": "digital_doujin"}),
+    ("漫画（FANZA / ebook / comic）", {"site": "FANZA", "service": "ebook", "floor": "comic"})
     # 例: 追加したい場合
     # ("エロマンガ（FANZA / ebook / comic）", {"site": "FANZA", "service": "ebook", "floor": "comic"}),
 ]

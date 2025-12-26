@@ -1,0 +1,575 @@
+{# =========================================================
+   TK-Tube.com 用 Post テンプレート (Jinja2)
+   ベース: javmix-av_post.html.j2
+   目的:
+     - TKTube のロゴ/配色（紫×シアンのグラデ）に寄せたUI
+     - CTA / メタ / ギャラリー / 注意喚起 を “同一トーン” に統一
+     - 余白・角丸・影を控えめにして、トップのUI（黒基調）と馴染ませる
+   ========================================================= #}
+
+{# ============================== 事前整形 ============================== #}
+{% set samples = item.sample_images.split("|") if item.sample_images else [] %}
+{% set poster  = item.trailer_poster or item.image_large or (samples[0] if samples else None) %}
+{% set _date   = (item.date.split(" ")[0] if item.date and (" " in item.date) else item.date) %}
+{% set tu      = item.trailer_url or '' %}
+{% set tu_l    = tu|lower|replace('\n','') %}
+{% set is_mp4  = (tu_l.endswith('.mp4') or ('.mp4?'  in tu_l)) %}
+{% set is_m3u8 = (tu_l.endswith('.m3u8') or ('.m3u8?' in tu_l)) %}
+{% set _max    = item._max_gallery|default(12) %}
+{% set W = item.player_width  or 1280 %}
+{% set H = item.player_height or 720 %}
+{% set aff_url = item.aff_url or item.URL %}
+{% set title = item.title or '' %}
+{% set safe_title = title|replace('"','') %}
+
+{# ルート相対の内部リンク基底 #}
+{% set TAG_BASE = '/tag/' %}
+{% set CAT_BASE = '/category/' %}
+
+{# ============================== URL 正規化マクロ ============================== #}
+{% macro fix(u) -%}
+  {%- if u and u.startswith('//') -%}https:{{ u }}
+  {%- else -%}{{ u }}{%- endif -%}
+{%- endmacro %}
+
+{# ============================== タグ/ジャンル 正規化マクロ ============================== #}
+{% set ZWSP = '​' %}  {# U+200B ZERO WIDTH SPACE #}
+{% set ZWNJ = '‌' %}  {# U+200C #}
+{% set ZWJ  = '‍' %}  {# U+200D #}
+{% set BOM  = '﻿' %}  {# U+FEFF #}
+
+{% macro norm(term) -%}
+  {{ (term or '')
+      | replace('　',' ')
+      | replace(ZWSP,'')
+      | replace(ZWNJ,'')
+      | replace(ZWJ,'')
+      | replace(BOM,'')
+      | trim
+      | urlencode
+  }}
+{%- endmacro %}
+
+<article class="entry tk-entry" data-tpl="tktube-v1">
+  {# ============================== リード動画 / 画像 ============================== #}
+  {% if item.trailer_embed %}
+    {% set iframe_title = (item.title or item.name or '動画') ~ ' – 公式プレイヤー' %}
+    <div class="fanza-embed fanza-embed--ui" style="--w:{{W}}; --h:{{H}};">
+      <iframe
+        src="{{ item.trailer_embed }}"
+        title="{{ iframe_title|e }}"
+        width="{{ W }}" height="{{ H }}"
+        loading="lazy" allowfullscreen
+        scrolling="no" frameborder="0"></iframe>
+    </div>
+  {% elif is_mp4 %}
+    <figure class="lead-media">
+      <video class="lead-media__video" controls preload="none" playsinline {% if poster %}poster="{{ poster }}"{% endif %}>
+        <source src="{{ item.trailer_url }}" type="video/mp4">
+      </video>
+      {% if title %}<figcaption class="lead-media__cap">{{ title }} — 予告編</figcaption>{% endif %}
+    </figure>
+  {% elif is_m3u8 %}
+    <figure class="lead-media">
+      <video class="lead-media__video hls-player" controls preload="none" playsinline data-src="{{ item.trailer_url }}" {% if poster %}poster="{{ poster }}"{% endif %}></video>
+      {% if title %}<figcaption class="lead-media__cap">{{ title }} — 予告編</figcaption>{% endif %}
+    </figure>
+  {% elif poster %}
+    <figure class="lead-media">
+      <a class="video-fallback" href="{{ aff_url }}" target="_blank" rel="sponsored noopener" aria-label="公式ページで動画を見る">
+        <img class="skip-lazy" src="{{ fix(poster) }}" alt="{{ title }}" decoding="async" loading="eager" width="1280" height="720" fetchpriority="high">
+        <span class="video-fallback__play" aria-hidden="true">▶</span>
+      </a>
+      {% if title %}<figcaption class="lead-media__cap"><a href="{{ aff_url }}" target="_blank" rel="sponsored noopener">公式ページで {{ title }} を見る</a></figcaption>{% endif %}
+    </figure>
+  {% endif %}
+
+  {# ============================== preconnect（画像CDN） ============================== #}
+  <script>
+  (function(){
+    var need = /pics\.dmm\.co\.jp|p\.dmm\.co\.jp/.test(document.documentElement.innerHTML);
+    if(!need) return;
+    var d1 = document.createElement('link');
+    d1.rel='preconnect'; d1.href='https://pics.dmm.co.jp'; d1.crossOrigin='';
+    document.head.appendChild(d1);
+    var d2 = document.createElement('link');
+    d2.rel='preconnect'; d2.href='https://p.dmm.co.jp'; d2.crossOrigin='';
+    document.head.appendChild(d2);
+  })();
+  </script>
+
+  {# ============================== 1st CTA ============================== #}
+  {% if aff_url %}
+    <p class="cta" id="tk-official">
+      <a class="cta__btn"
+         href="{{ aff_url }}" target="_blank" rel="sponsored noopener"
+         style="
+           display:block;
+           width:100%;
+           box-sizing:border-box;
+           padding:1rem 1.15rem;
+           border-radius:14px;
+           background:linear-gradient(90deg,#431e9b,#2fe3d0);
+           color:#fff;
+           text-decoration:none;
+           text-align:center;
+           border:2px solid rgba(255,255,255,.22);
+           box-shadow:0 14px 30px rgba(67,30,155,.20);
+         ">
+        <span class="cta__main"><em>{{ title }}</em> をフルで見る</span>
+      </a>
+    </p>
+  {% endif %}
+
+  {# ============================== タイトル ============================== #}
+  {% if title %}
+    <header class="entry__header">
+      <h2 class="entry__title">{% if item.cid %}<span class="tk-cid">[{{ item.cid }}]</span> {% endif %}{{ title }}</h2>
+    </header>
+  {% endif %}
+
+  {# ============================== メタ情報 ============================== #}
+  <section class="entry__meta" aria-label="作品情報" id="tk-info">
+    <dl class="meta">
+      {% if item.maker %}
+        <div class="meta__row">
+          <dt>メーカー</dt>
+          <dd>
+            <a href="{{ TAG_BASE }}{{ norm(item.maker_clean) }}/" class="meta__link">{{ item.maker_clean }}</a>
+          </dd>
+        </div>
+      {% endif %}
+      {% if item.actress %}
+        <div class="meta__row">
+          <dt>出演</dt>
+          <dd>
+            {% for name in (item.actress|replace("、",",")|replace("・",",")|replace("/",",")).split(",") if name.strip() %}
+              <a href="{{ CAT_BASE }}{{ norm(name) }}/" class="chip">{{ name|trim }}</a>
+            {% endfor %}
+          </dd>
+        </div>
+      {% endif %}
+      {% if item.label_clean %}
+        <div class="meta__row">
+          <dt>レーベル</dt>
+          <dd>
+            <a href="{{ TAG_BASE }}{{ norm(item.label_clean) }}/" class="meta__link">{{ item.label_clean }}</a>
+          </dd>
+        </div>
+      {% endif %}
+      {% if item.release_date %}
+        <div class="meta__row">
+          <dt>発売日</dt>
+          <dd>{{ item.release_date }}</dd>
+        </div>
+      {% endif %}
+      {% if item.cid %}
+        <div class="meta__row">
+          <dt>品番</dt>
+          <dd><a class="meta__link" href="/cid/{{ norm(item.cid) }}/">{{ item.cid }}</a></dd>
+        </div>
+      {% endif %}
+      {% if item.genres_clean %}
+        <div class="meta__row">
+          <dt>ジャンル</dt>
+          <dd>
+            {% for g in (item.genres_clean or '').split(',') if g.strip() %}
+              <a class="chip" href="{{ TAG_BASE }}{{ norm(g) }}/">{{ g }}</a>
+            {% endfor %}
+          </dd>
+        </div>
+      {% endif %}
+    </dl>
+  </section>
+
+  {# ============================== ギャラリー ============================== #}
+  {% if samples %}
+    <section class="gallery" aria-label="サンプル画像" id="tk-gallery">
+      {% for u in samples[:_max] if u %}
+        <figure class="gallery__item">
+          <a href="{{ aff_url }}" target="_blank" rel="sponsored noopener" class="gallery__link" aria-label="公式ページで {{ title }} を見る (画像 {{ loop.index }})">
+            <img src="{{ fix(u) }}" alt="{{ title }} サンプル {{ loop.index }}" decoding="async" loading="lazy" fetchpriority="low" width="600" height="400">
+          </a>
+          <figcaption class="gallery__cap"><a href="{{ aff_url }}" target="_blank" rel="sponsored noopener">[{{ title }} - 画像{{ loop.index }}]</a></figcaption>
+        </figure>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  {# ============================== 2nd CTA ============================== #}
+  {% if aff_url %}
+    <p class="cta cta--inline">
+      <a class="cta__btn"
+         href="{{ aff_url }}" target="_blank" rel="sponsored noopener"
+         style="
+           display:block;
+           width:100%;
+           box-sizing:border-box;
+           padding:1rem 1.15rem;
+           border-radius:14px;
+           background:linear-gradient(90deg,#431e9b,#2fe3d0);
+           color:#fff;
+           text-decoration:none;
+           text-align:center;
+           border:2px solid rgba(255,255,255,.22);
+           box-shadow:0 14px 30px rgba(67,30,155,.20);
+         ">
+        <span class="cta__main"><em>{{ title }}</em> をフルで見る</span>
+      </a>
+    </p>
+  {% endif %}
+
+  {# ============================== 注意喚起（色味をTKTube寄せ） ============================== #}
+  <aside class="notice notice--legal" role="note" aria-label="視聴に関する注意">
+    <strong class="notice__hd">公式配信で安全に楽しもう</strong>
+    <p class="notice__tx">
+      海賊版サイトや違法アップロードの視聴は、著作権侵害の助長だけでなく
+      マルウェア感染・個人情報の流出などのリスクがあります。作品は必ず
+      公式配信で視聴してください。
+    </p>
+    <ul class="notice__list">
+      <li>URLが正規ドメイン（例：<code>dmm.co.jp</code>）かを確認する</li>
+      <li>外部ダウンロードの強要や過剰なポップアップが出るサイトは利用しない</li>
+      <li>本ページのリンクは <em>スポンサー付き</em> です。料金等は公式表記を必ず確認</li>
+    </ul>
+  </aside>
+
+  {# ============================== JSON-LD (VideoObject) ============================== #}
+  {% set has_visual = (item.trailer_embed or is_mp4 or is_m3u8 or poster or (samples|length>0)) %}
+  {% if has_visual %}
+    {% set thumb = poster if poster else (samples[0] if samples else None) %}
+    {% set tz = site_tz or '+09:00' %}
+    {% if item.date_iso %}
+      {% set upload_iso = item.date_iso %}
+    {% elif _date %}
+      {% set upload_iso = _date ~ 'T00:00:00' ~ tz %}
+    {% else %}
+      {% set upload_iso = None %}
+    {% endif %}
+    {% set video = {"@context":"https://schema.org","@type":"VideoObject","name": (title or "") ~ " 予告編","description": item.description or title or ""} %}
+    {% if thumb %}{% set _ = video.update({"thumbnailUrl": thumb}) %}{% endif %}
+    {% if upload_iso %}{% set _ = video.update({"uploadDate": upload_iso}) %}{% endif %}
+    {% if item.trailer_url %}
+      {% set _ = video.update({"contentUrl": item.trailer_url}) %}
+    {% elif item.trailer_embed %}
+      {% set _ = video.update({"embedUrl": item.trailer_embed}) %}
+    {% endif %}
+    {% if item.URL %}{% set _ = video.update({"url": item.URL}) %}{% endif %}
+    {% if item.trailer_duration and item.trailer_duration|int > 0 %}
+      {% set dur = item.trailer_duration|int %}
+      {% set h = (dur // 3600)|int %}
+      {% set m = ((dur % 3600) // 60)|int %}
+      {% set s = (dur % 60)|int %}
+      {% set dur_iso = 'PT' ~ (h ~ 'H' if h) ~ (m ~ 'M' if (h or m)) ~ s ~ 'S' %}
+      {% set _ = video.update({"duration": dur_iso}) %}
+    {% endif %}
+    {% if site_name and site_logo_url %}
+      {% set _ = video.update({"publisher": {"@type": "Organization","name": site_name,"logo": {"@type": "ImageObject", "url": site_logo_url }}}) %}
+    {% endif %}
+    <script type="application/ld+json">{{ video | tojson }}</script>
+  {% endif %}
+
+</article>
+
+{# ============================== HLS 初期化 ============================== #}
+<script>
+(function(){
+  var el = document.querySelector('video.hls-player');
+  if(!el) return;
+  var src = el.getAttribute('data-src');
+  if (!src) return;
+  if (el.canPlayType('application/vnd.apple.mpegurl')) {
+    el.src = src;
+  } else if (window.Hls) {
+    var hls = new Hls({ maxBufferLength: 30 });
+    hls.loadSource(src);
+    hls.attachMedia(el);
+  } else {
+    var p = el.parentNode;
+    var a = document.createElement('a');
+    a.href = src; a.textContent = 'サンプル動画を再生 (m3u8)'; a.rel = 'noopener'; a.target = '_blank';
+    p.appendChild(a);
+  }
+})();
+</script>
+
+{# ============================== スタイル（TKTubeトーン） ============================== #}
+<style>
+/* =========================================================
+   TKTube Palette (from logo):
+     - Deep Purple: #431e9b
+     - Cyan:        #2fe3d0
+     - Background:  #4c6971 (logo bg)
+   ========================================================= */
+
+/* ====== Theme Vars ====== */
+.tk-entry{
+  --gap:14px;
+  --radius:12px;
+
+  --bg:#ffffff;
+  --surface:#f6f7fb;
+  --border:#e6e8f0;
+
+  --fg:#0b1020;
+  --fg-weak:#4b5563;
+
+  --brand-1:#431e9b; /* purple */
+  --brand-2:#2fe3d0; /* cyan */
+  --brand-3:#723dfc; /* violet (optional) */
+
+  --cta-text:#ffffff;
+  --shadow: 0 10px 24px rgba(0,0,0,.08);
+
+  --notice-bg:#eafaf6;
+  --notice-border:#2fe3d0;
+}
+
+/* ====== Base ====== */
+.tk-entry{color:var(--fg)}
+.tk-entry a{color:inherit}
+.tk-entry .entry__header{margin:0 0 .6rem}
+.tk-entry .entry__title{
+  font-size:clamp(1.05rem,1.4vw+1rem,1.8rem);
+  line-height:1.35;
+  margin:0 0 .2rem;
+  font-weight:900;
+  letter-spacing:.01em;
+}
+.tk-entry .tk-cid{opacity:.75;font-weight:800}
+
+/* ====== Top links ====== */
+.tk-toplinks{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin:0 0 .75rem;
+}
+.tk-toplinks__a{
+  font-weight:800;
+  font-size:.92rem;
+  text-decoration:none;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:999px;
+  padding:.35rem .75rem;
+}
+.tk-toplinks__a:hover{filter:brightness(.98)}
+
+/* ====== FANZA iframe ====== */
+.fanza-embed{ position:relative; width:100%; max-width:calc(var(--w)*1px); margin:0 auto 1rem; overflow:hidden; background:#000; border-radius:var(--radius); line-height:0; clear:both; isolation:isolate; box-shadow:var(--shadow); }
+.fanza-embed--ui::before{ content:""; display:block; padding-top:75%; }
+.fanza-embed > iframe{ position:absolute; inset:0; width:100% !important; height:100% !important; border:0; display:block !important; }
+.entry-content iframe{ max-width:none !important; }
+
+/* ====== Lead Media ====== */
+.lead-media{margin:0 0 .8rem}
+.lead-media__video{
+  width:100%;
+  display:block;
+  background:#000;
+  border-radius:var(--radius);
+  aspect-ratio:16/9;
+  box-shadow:var(--shadow);
+}
+.lead-media__cap{font-size:.9rem;color:var(--fg-weak);margin:.35rem 0 0}
+.video-fallback{position:relative;display:block;border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+.video-fallback img{width:100%;height:auto;display:block;aspect-ratio:16/9;object-fit:cover}
+.video-fallback__play{
+  position:absolute;
+  inset:auto 14px 14px auto;
+  width:44px;height:44px;
+  display:grid;place-items:center;
+  border-radius:999px;
+  color:#0b0b0b;
+  background:linear-gradient(135deg, var(--brand-2), #ffffff);
+  border:2px solid rgba(255,255,255,.75);
+  font-weight:900;
+  box-shadow:0 6px 18px rgba(0,0,0,.18);
+}
+
+/* ====== Meta（表風の囲み） ====== */
+.tk-entry .entry__meta .meta{
+  display:grid !important;
+  grid-template-columns: 8.5em 1fr !important;
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:12px;
+  overflow:hidden;
+  box-shadow: 0 8px 18px rgba(0,0,0,.04);
+}
+.tk-entry .entry__meta .meta__row{ display:contents !important; }
+.tk-entry .entry__meta .meta__row > dt,
+.tk-entry .entry__meta .meta__row > dd{
+  padding:10px 12px;
+  border-bottom:1px solid #eff1f6;
+  line-height:1.6;
+}
+.tk-entry .entry__meta .meta__row > dt{
+  grid-column:1 !important;
+  background:linear-gradient(180deg, #f5f6fb, #f0f3ff);
+  font-weight:800;
+  color:#111827;
+  border-right:1px solid var(--border);
+  white-space:nowrap;
+}
+.tk-entry .entry__meta .meta__row > dd{
+  grid-column:2 !important;
+  margin:0 !important;
+  display:flex !important;
+  flex-wrap:wrap !important;
+  gap:8px 10px !important;
+  align-items:center !important;
+  word-break:normal !important;
+}
+.tk-entry .entry__meta .meta__row:last-of-type > dt,
+.tk-entry .entry__meta .meta__row:last-of-type > dd{ border-bottom:none !important; }
+.tk-entry .entry__meta .meta__row > dd > *{
+  flex:0 0 auto !important;
+  display:inline-flex !important;
+  align-items:center;
+  white-space:nowrap !important;
+  word-break:keep-all !important;
+  writing-mode:horizontal-tb !important;
+}
+
+/* チップ */
+.tk-entry .chip,
+.tk-entry .entry__meta .meta__row > dd a{
+  background:rgba(67,30,155,.06);
+  border:1px solid rgba(67,30,155,.18);
+  border-radius:999px;
+  padding:.22rem .7rem;
+  text-decoration:none;
+  font-weight:800;
+}
+.tk-entry .chip:hover,
+.tk-entry .entry__meta .meta__row > dd a:hover{
+  background:rgba(47,227,208,.10);
+  border-color:rgba(47,227,208,.35);
+}
+
+/* ====== Gallery ====== */
+.tk-entry .gallery{ display:grid; grid-template-columns: 1fr !important; gap:12px; margin-top:.9rem; }
+.tk-entry .gallery__item{
+  border:1px solid var(--border);
+  background:var(--bg);
+  border-radius:12px;
+  overflow:hidden;
+  box-shadow: 0 8px 18px rgba(0,0,0,.04);
+}
+.tk-entry .gallery__link{display:block}
+.tk-entry .gallery__item img{ display:block; width:100%; height:auto; object-fit:contain; border-radius:0; }
+.tk-entry .gallery__cap{font-size:.92rem; margin:.45rem .8rem .8rem; color:var(--fg-weak); }
+.tk-entry .gallery__cap a{ text-decoration:underline; font-weight:800; }
+
+/* ====== CTA ====== */
+.tk-entry .cta{ margin:1.05rem 0 0; }
+.tk-entry .cta--inline{ margin:.8rem 0 0; }
+.tk-entry .cta__btn{
+  display:flex;
+  flex-direction:column;
+  gap:.25rem;
+  width:100%;
+  box-sizing:border-box;
+
+  background: linear-gradient(90deg, var(--brand-1), var(--brand-2));
+  color:var(--cta-text);
+  border-radius:14px;
+  border:0;
+  padding:1rem 1.15rem;
+  text-decoration:none;
+  text-align:center;
+
+  box-shadow: 0 14px 30px rgba(67,30,155,.20);
+  transition: transform .06s ease, filter .2s ease;
+}
+.tk-entry .cta__btn:hover{ filter:brightness(1.02); transform:translateY(-1px); }
+.tk-entry .cta__btn:active{ transform:translateY(0px); }
+.tk-entry .cta__btn:focus-visible{ outline:3px solid rgba(47,227,208,.55); outline-offset:3px; }
+
+.tk-entry .cta__kicker{ font-weight:900; opacity:.92; letter-spacing:.02em; }
+.tk-entry .cta__main{ font-weight:950; font-size:clamp(1.03rem, 0.95rem + 0.7vw, 1.28rem); line-height:1.2; }
+.tk-entry .cta__main em{ font-style:normal; text-decoration:underline; text-underline-offset:.18em; }
+.tk-entry .cta__note{ display:block; margin:.35rem .1rem 0; color:var(--fg-weak); }
+
+/* 小さめCTA */
+.tk-entry .cta__btn--small{
+  border-radius:12px;
+  padding:.85rem 1rem;
+  flex-direction:row;
+  justify-content:center;
+}
+
+/* ====== Notice（TKTubeトーン） ====== */
+.tk-entry .notice{
+  position:relative;
+  border:2px solid var(--notice-border) !important;
+  background:var(--notice-bg) !important;
+  border-radius:14px;
+  padding:14px 16px 14px 52px;
+  margin:1rem 0 0;
+  box-shadow: 0 8px 18px rgba(0,0,0,.05);
+}
+.tk-entry .notice__hd{display:block;font-weight:950;margin:0 0 .25rem}
+.tk-entry .notice__tx{margin:.35rem 0;line-height:1.85}
+.tk-entry .notice__list{ margin:.45rem 0 0 1.2rem; }
+.tk-entry .notice__list li{ margin:.2rem 0; }
+
+/* 左のアクセントバー */
+.tk-entry .notice::before{
+  content:"";
+  position:absolute;
+  inset: 10px auto 10px 12px;
+  width: 7px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, var(--brand-1), var(--brand-2));
+}
+
+/* アイコン */
+.tk-entry .notice.notice--legal::after{
+  content:"";
+  position:absolute;
+  left: 22px; top: 14px;
+  width: 22px; height: 22px;
+  background:
+    url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'>\
+<path d='M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z' stroke='%23431e9b' stroke-width='2'/>\
+<path d='M12 11v6' stroke='%232fe3d0' stroke-width='2' stroke-linecap='round'/>\
+<path d='M12 7h.01' stroke='%232fe3d0' stroke-width='4' stroke-linecap='round'/>\
+</svg>") center/contain no-repeat;
+  opacity: .95;
+}
+
+/* ====== 遅延レイアウト（視界外ブロック） ====== */
+.tk-entry .gallery,
+.tk-entry .entry__meta,
+.tk-entry .notice{ content-visibility:auto; contain-intrinsic-size:800px; }
+
+/* ====== ダークモード（ヘッダー黒基調に寄せる） ====== */
+@media (prefers-color-scheme: dark){
+  .tk-entry{
+    --bg:#0b0f14;
+    --surface:#0f1620;
+    --border:rgba(255,255,255,.10);
+    --fg:#e5e7eb;
+    --fg-weak:#a7b0bf;
+    --shadow: 0 10px 24px rgba(0,0,0,.35);
+    --notice-bg: rgba(47,227,208,.10);
+    --notice-border: rgba(47,227,208,.55);
+  }
+  .tk-entry .entry__meta .meta{ background:var(--bg); }
+  .tk-entry .entry__meta .meta__row > dt{
+    background:rgba(255,255,255,.06);
+    color:var(--fg);
+  }
+  .tk-entry .chip,
+  .tk-entry .entry__meta .meta__row > dd a{
+    background:rgba(67,30,155,.18);
+    border-color:rgba(67,30,155,.28);
+  }
+  .tk-entry .gallery__item{ background:var(--bg); }
+  .tk-entry .cta__note{ color:var(--fg-weak); }
+}
+</style>
